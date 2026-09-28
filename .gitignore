@@ -1,0 +1,9 @@
+# Local Pi runtime state
+.atl/
+
+# Environment
+.env
+
+# Binaries
+/bin/
+*.exe
