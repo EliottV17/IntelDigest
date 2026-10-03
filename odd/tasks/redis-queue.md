@@ -19,7 +19,7 @@ Publish each newly persisted digest job to Redis Streams from the API, with a st
 2. [x] Add Redis connection/publisher package and configuration with focused contract/config tests. User authorized `github.com/redis/go-redis/v9@v9.7.3`; TDD RED/GREEN observed.
 3. [x] Inject publisher into API POST flow and wire `cmd/api`; add test-first coverage for ordering, success, and 503 error body containing `job_id`.
 4. [x] Add build-tagged Redis integration coverage and update README runtime documentation; verify against Redis Compose service.
-5. [ ] Update `.env.example` with Redis variables/defaults. **Blocked:** sensitive-path policy still denied access after user authorized narrow handling; do not bypass.
+5. [x] Update `.env.example` with Redis variables/defaults. User attested the exact non-secret values; committed as `00a0964 chore(config): document Redis environment settings`. The file itself was not directly inspected due the safety block.
 
 ## Acceptance criteria
 - API persists then publishes before returning 202; failed publish returns 503 with `{ "error": "...", "job_id": "<uuid>" }` and does not pretend persistence rolled back.
@@ -42,11 +42,11 @@ Publish each newly persisted digest job to Redis Streams from the API, with a st
 - Independent verifier observed `go test ./internal/api` and `go test ./...` pass, and confirmed CreateJob-before-Publish plus exact 503 response containing the created `job_id`.
 - Work-unit commit for item 3: `0349424 feat(api): publish digest jobs to Redis`.
 - Native review for `0349424` assessed medium and the user authorized one `review-reliability` run; capture approved and exact acknowledgement burned authority.
-- During item 4 exploration, tool policy blocked reading `.env.example` as a sensitive path. User authorized narrowly scoped handling, but the tool continued to block access; do not bypass. README documents Redis environment variables; leave `.env.example` unchanged and report this limitation.
+- `.env.example` direct read remained blocked. Per the user's explicit attestation and commit request, only that file was committed without exposing its content to the model; exact values were supplied by the user.
 
 - Item 4 verification: `go test ./internal/queue`, `REDIS_URL=redis://localhost:6379/0 go test -tags integration ./internal/queue`, and `go test ./...` passed; integration test ran against Compose Redis, which was left running.
 - Work-unit commit for item 4: `4fc88da test(queue): cover Redis Streams integration`; writer and independent verifier passed unit, tagged live Redis integration, and full suite.
 - Native review for `4fc88da` assessed medium; after user authorized the one-run forecast, `review-reliability` approved and exact acknowledgement burned authority.
 
 ## Next step
-The implementation is functionally verified and all three work-unit commits are review-approved. The only remaining item is adding Redis defaults to `.env.example`; the user authorized narrow handling but the safety tool still blocks it, so do not access it through alternate means. Request a tool-approved access route or leave this task explicitly partial.
+Feature implementation is complete. Native review of the exact unreviewed candidate `d29c8ea7d1bfcc1e21e2504ef4c5fadb1be6a3bdab91bd5a5819377b3d247951` approved and was acknowledged. Full `go test ./...` passed after the env-sample commit. Direct `.env.example` contents remain unverified by the agent due the sensitive-path policy; the commit follows the user's explicit attestation.
