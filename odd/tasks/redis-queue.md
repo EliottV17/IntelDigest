@@ -35,14 +35,14 @@ Publish each newly persisted digest job to Redis Streams from the API, with a st
 - Plan amendment verified by reading `PLAN.md`; no code tests applicable to this documentation-only update.
 - User explicitly authorized exact dependency command `go get github.com/redis/go-redis/v9@v9.7.3`; it was used for the maintained Streams client rather than hand-rolling Redis protocol.
 - Item 2 TDD evidence: RED `go test ./internal/config ./internal/queue` failed as expected before implementation; GREEN focused tests passed after implementation.
-- Independent verifier observed `go test ./internal/config ./internal/queue` and `go test ./...` both pass. Writer also ran both suites successfully. No live Redis integration test yet.
+- Independent verifier observed `go test ./internal/config ./internal/queue` and `go test ./...` both pass. Writer also ran both suites successfully. The subsequent item 4 integration test was verified against live Compose Redis.
 - `gentle_review assess` returned `unassessable` because intended untracked files were not declared; its fallback required an independent verifier, which passed.
 - Work-unit commit for item 2: `4d70f42 feat(queue): add Redis Streams publisher`; medium native review approved and acknowledged after user authorized one reviewer run.
 - Item 3 TDD evidence: `go test ./internal/api` failed as expected before the handler publisher interface existed, then passed after implementation and refactor check.
 - Independent verifier observed `go test ./internal/api` and `go test ./...` pass, and confirmed CreateJob-before-Publish plus exact 503 response containing the created `job_id`.
 - Work-unit commit for item 3: `0349424 feat(api): publish digest jobs to Redis`.
 - Native review for `0349424` assessed medium and the user authorized one `review-reliability` run; capture approved and exact acknowledgement burned authority.
-- During item 4 exploration, tool policy blocked reading `.env.example` as a sensitive path. User authorized narrowly scoped handling, but the tool continued to block access; do not bypass. Continue with integration test and README; leave `.env.example` unchanged and report this limitation.
+- During item 4 exploration, tool policy blocked reading `.env.example` as a sensitive path. User authorized narrowly scoped handling, but the tool continued to block access; do not bypass. README documents Redis environment variables; leave `.env.example` unchanged and report this limitation.
 
 - Item 4 verification: `go test ./internal/queue`, `REDIS_URL=redis://localhost:6379/0 go test -tags integration ./internal/queue`, and `go test ./...` passed; integration test ran against Compose Redis, which was left running.
 - Work-unit commit for item 4: `4fc88da test(queue): cover Redis Streams integration`; writer and independent verifier passed unit, tagged live Redis integration, and full suite.
