@@ -12,6 +12,7 @@ import (
 	"inteldigest/internal/api"
 	"inteldigest/internal/config"
 	"inteldigest/internal/db"
+	"inteldigest/internal/queue"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -37,8 +38,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	publisher, err := queue.NewPublisher(ctx, cfg.RedisURL, cfg.RedisStream, cfg.RedisDialTimeout, cfg.RedisPublishTimeout)
+	if err != nil {
+		slog.Error("connecting to Redis publisher", "error", err)
+		pool.Close()
+		os.Exit(1)
+	}
+	defer func() {
+		if err := publisher.Close(); err != nil {
+			slog.Error("closing Redis publisher", "error", err)
+		}
+	}()
+
 	repo := db.NewRepository(pool)
-	router := api.NewRouter(repo)
+	router := api.NewRouter(repo, publisher)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.APIPort,

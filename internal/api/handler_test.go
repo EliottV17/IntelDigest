@@ -13,6 +13,7 @@ import (
 	"inteldigest/internal/api"
 	"inteldigest/internal/db"
 	"inteldigest/internal/models"
+	"inteldigest/internal/queue"
 
 	"github.com/google/uuid"
 )
@@ -46,11 +47,25 @@ func (f *fakeRepo) GetJobByID(ctx context.Context, id uuid.UUID) (*models.Job, e
 	return j, nil
 }
 
-// --- POST /api/v1/digests ---
+type fakePublisher struct {
+	repo     *fakeRepo
+	messages []queue.Message
+	err      error
+}
+
+func (f *fakePublisher) Publish(ctx context.Context, message queue.Message) error {
+	if f.repo != nil {
+		if _, persisted := f.repo.jobs[message.JobID]; !persisted {
+			return errors.New("job was published before persistence")
+		}
+	}
+	f.messages = append(f.messages, message)
+	return f.err
+}
 
 func TestPostDigest_ValidURL(t *testing.T) {
 	repo := newFakeRepo()
-	handler := api.NewRouter(repo)
+	handler := api.NewRouter(repo, &fakePublisher{repo: repo})
 
 	body := `{"url":"https://example.com/article"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/digests", bytes.NewBufferString(body))
@@ -62,7 +77,6 @@ func TestPostDigest_ValidURL(t *testing.T) {
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
-
 	var resp map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("invalid JSON response: %v", err)
@@ -72,9 +86,64 @@ func TestPostDigest_ValidURL(t *testing.T) {
 	}
 }
 
+func TestPostDigest_PublishesPersistedJob(t *testing.T) {
+	repo := newFakeRepo()
+	publisher := &fakePublisher{repo: repo}
+	handler := api.NewRouter(repo, publisher)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/digests", bytes.NewBufferString(`{"url":"https://example.com/article"}`))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	if len(publisher.messages) != 1 {
+		t.Fatalf("published messages = %d, want 1", len(publisher.messages))
+	}
+	message := publisher.messages[0]
+	if message.SchemaVersion != queue.SchemaVersion || message.URL != "https://example.com/article" {
+		t.Errorf("published message = %+v, want schema version %d and requested URL", message, queue.SchemaVersion)
+	}
+	if _, exists := repo.jobs[message.JobID]; !exists {
+		t.Error("published job_id was not persisted")
+	}
+}
+
+func TestPostDigest_PublishFailureReturnsCreatedJobID(t *testing.T) {
+	repo := newFakeRepo()
+	publisher := &fakePublisher{repo: repo, err: errors.New("redis unavailable")}
+	handler := api.NewRouter(repo, publisher)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/digests", bytes.NewBufferString(`{"url":"https://example.com/article"}`))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", w.Code)
+	}
+	var response map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("invalid JSON response: %v", err)
+	}
+	if len(response) != 2 || response["error"] != "queue unavailable" {
+		t.Fatalf("response = %#v, want exactly error and job_id", response)
+	}
+	jobID, err := uuid.Parse(response["job_id"])
+	if err != nil {
+		t.Fatalf("invalid response job_id: %v", err)
+	}
+	if len(publisher.messages) != 1 || publisher.messages[0].JobID != jobID {
+		t.Fatalf("response job_id = %s, want created published job ID", jobID)
+	}
+	if _, persisted := repo.jobs[jobID]; !persisted {
+		t.Fatal("failed publication job was not retained in repository")
+	}
+}
+
 func TestPostDigest_InvalidURL(t *testing.T) {
 	repo := newFakeRepo()
-	handler := api.NewRouter(repo)
+	handler := api.NewRouter(repo, &fakePublisher{repo: repo})
 
 	cases := []struct {
 		name string
@@ -102,7 +171,7 @@ func TestPostDigest_InvalidURL(t *testing.T) {
 
 func TestPostDigest_MalformedBody(t *testing.T) {
 	repo := newFakeRepo()
-	handler := api.NewRouter(repo)
+	handler := api.NewRouter(repo, &fakePublisher{repo: repo})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/digests", bytes.NewBufferString("not json"))
 	req.Header.Set("Content-Type", "application/json")
@@ -115,16 +184,10 @@ func TestPostDigest_MalformedBody(t *testing.T) {
 	}
 }
 
-// Ensure errors is used (for future tests).
-var _ = errors.New
-
-// --- GET /api/v1/digests/{id} ---
-
 func TestGetDigest_Found(t *testing.T) {
 	repo := newFakeRepo()
-	handler := api.NewRouter(repo)
+	handler := api.NewRouter(repo, &fakePublisher{repo: repo})
 
-	// Create a job first via POST.
 	body := `{"url":"https://example.com/test"}`
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/digests", bytes.NewBufferString(body))
 	createReq.Header.Set("Content-Type", "application/json")
@@ -135,7 +198,6 @@ func TestGetDigest_Found(t *testing.T) {
 	json.Unmarshal(createW.Body.Bytes(), &createResp)
 	jobID := createResp["job_id"].(string)
 
-	// GET the job.
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/digests/"+jobID, nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -143,7 +205,6 @@ func TestGetDigest_Found(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
-
 	var resp map[string]any
 	json.Unmarshal(w.Body.Bytes(), &resp)
 	if resp["id"] != jobID {
@@ -156,7 +217,7 @@ func TestGetDigest_Found(t *testing.T) {
 
 func TestGetDigest_NotFound(t *testing.T) {
 	repo := newFakeRepo()
-	handler := api.NewRouter(repo)
+	handler := api.NewRouter(repo, &fakePublisher{repo: repo})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/digests/"+uuid.New().String(), nil)
 	w := httptest.NewRecorder()
@@ -169,7 +230,7 @@ func TestGetDigest_NotFound(t *testing.T) {
 
 func TestGetDigest_BadID(t *testing.T) {
 	repo := newFakeRepo()
-	handler := api.NewRouter(repo)
+	handler := api.NewRouter(repo, &fakePublisher{repo: repo})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/digests/not-a-uuid", nil)
 	w := httptest.NewRecorder()
@@ -180,11 +241,9 @@ func TestGetDigest_BadID(t *testing.T) {
 	}
 }
 
-// --- GET /healthz ---
-
 func TestHealthz(t *testing.T) {
 	repo := newFakeRepo()
-	handler := api.NewRouter(repo)
+	handler := api.NewRouter(repo, &fakePublisher{repo: repo})
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	w := httptest.NewRecorder()
@@ -193,7 +252,6 @@ func TestHealthz(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
-
 	var resp map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
