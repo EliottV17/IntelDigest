@@ -10,6 +10,7 @@ import (
 
 	"inteldigest/internal/db"
 	"inteldigest/internal/models"
+	"inteldigest/internal/queue"
 
 	"github.com/google/uuid"
 )
@@ -21,14 +22,20 @@ type JobRepository interface {
 	GetJobByID(ctx context.Context, id uuid.UUID) (*models.Job, error)
 }
 
+// JobPublisher publishes created jobs to the queue.
+type JobPublisher interface {
+	Publish(ctx context.Context, message queue.Message) error
+}
+
 // Handler holds dependencies for the HTTP handlers.
 type Handler struct {
-	repo JobRepository
+	repo      JobRepository
+	publisher JobPublisher
 }
 
 // NewRouter creates an http.Handler with all routes registered.
-func NewRouter(repo JobRepository) http.Handler {
-	h := &Handler{repo: repo}
+func NewRouter(repo JobRepository, publisher JobPublisher) http.Handler {
+	h := &Handler{repo: repo, publisher: publisher}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/digests", h.createDigest)
@@ -57,6 +64,20 @@ func (h *Handler) createDigest(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		slog.Error("creating job", "error", err)
 		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	message := queue.Message{
+		SchemaVersion: queue.SchemaVersion,
+		JobID:         job.ID,
+		URL:           job.URL,
+	}
+	if err := h.publisher.Publish(r.Context(), message); err != nil {
+		slog.Error("publishing job", "job_id", job.ID, "error", err)
+		respondJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error":  "queue unavailable",
+			"job_id": job.ID.String(),
+		})
 		return
 	}
 
