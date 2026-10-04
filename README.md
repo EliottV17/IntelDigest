@@ -139,18 +139,15 @@ Unit tests do not require Redis:
 go test ./...
 ```
 
-Redis publication integration coverage is opt-in and requires a reachable Redis instance. For the Compose service, start it with `docker compose up -d redis`, then run:
+Integration tests require already-running local PostgreSQL and Redis services; the test target does not start, stop, migrate, or reset application services. If needed, a human can start only the declared services with `docker compose up -d postgres redis`. The tests use explicit local-only connection URLs and may be run serially with:
 
 ```bash
-REDIS_URL=redis://localhost:6379/0 go test -tags integration ./internal/queue
+make test-integration
 ```
 
-The integration test uses a unique Stream key, verifies the published entry's exact JSON `data` payload, and deletes its Stream on cleanup. PostgreSQL integration tests require PostgreSQL:
+The target runs the database, queue, and worker integration packages with `-p 1` because their isolated database lifecycle must not overlap. PostgreSQL tests derive and mutate only `inteldigest_test`, guarded by the test harness; they never mutate the application `inteldigest` database. Queue and worker tests create unique Redis stream/group names and delete only their owned stream during cleanup. Services must be ready before running the command.
 
-```bash
-DATABASE_URL="postgres://inteldigest:inteldigest@localhost:5432/inteldigest?sslmode=disable" \
-  go test -tags integration ./internal/db/...
-```
+Worker integration coverage exercises the real PostgreSQL repository, Redis consumer, processor, and pool together, but injects a deterministic fake `ArticleScraper`. It verifies atomic duplicate claims, safe scrape-error diagnosis, unacknowledged processing failures, terminal duplicate ACKs, and restart behavior that leaves old pending work unrecovered. This is not a production CLI/live end-to-end run and does not prove the real HTTP article pipeline; scraper HTTP/TLS/public-destination policy is covered separately by scraper tests. The synchronous result receiver is still nondurable, so successful and failed jobs remain `processing` and are not ACKed.
 
 ## Repository layout
 
