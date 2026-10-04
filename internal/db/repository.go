@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"inteldigest/internal/models"
@@ -16,6 +17,8 @@ import (
 
 // ErrNotFound is returned when a job does not exist.
 var ErrNotFound = errors.New("job not found")
+
+const maxScrapeErrorLength = 1024
 
 // DBTX is satisfied by both *pgxpool.Pool and pgx.Tx,
 // allowing the repository to work with either.
@@ -55,6 +58,38 @@ func (r *Repository) CreateJob(ctx context.Context, url string) (*models.Job, er
 		CreatedAt: now,
 		UpdatedAt: now,
 	}, nil
+}
+
+// TryMarkProcessing atomically claims a pending job for processing.
+func (r *Repository) TryMarkProcessing(ctx context.Context, id uuid.UUID) (bool, error) {
+	tag, err := r.db.Exec(ctx,
+		`UPDATE jobs
+		 SET status = 'processing', error = NULL, updated_at = NOW()
+		 WHERE id = $1 AND status = 'pending'`,
+		id,
+	)
+	if err != nil {
+		return false, fmt.Errorf("mark job processing: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// RecordScrapeError stores a bounded diagnostic without changing job status.
+func (r *Repository) RecordScrapeError(ctx context.Context, id uuid.UUID, safeReason string) (bool, error) {
+	if runes := []rune(safeReason); len(runes) > maxScrapeErrorLength {
+		safeReason = string(runes[:maxScrapeErrorLength])
+	}
+
+	tag, err := r.db.Exec(ctx,
+		`UPDATE jobs
+		 SET error = $2, updated_at = NOW()
+		 WHERE id = $1 AND status = 'processing'`,
+		id, safeReason,
+	)
+	if err != nil {
+		return false, fmt.Errorf("record scrape error: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
 }
 
 // GetJobByID retrieves a job by its UUID. Returns ErrNotFound if it does not exist.
