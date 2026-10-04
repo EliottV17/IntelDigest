@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"inteldigest/internal/db"
@@ -147,6 +148,129 @@ func TestGetJobByIDNotFound(t *testing.T) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
+
+func TestTryMarkProcessingConcurrentClaims(t *testing.T) {
+	ctx := context.Background()
+	id := insertIntegrationJob(t, ctx, "pending", nil)
+
+	first, err := testPool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire first connection: %v", err)
+	}
+	defer first.Release()
+	second, err := testPool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire second connection: %v", err)
+	}
+	defer second.Release()
+
+	start := make(chan struct{})
+	results := make(chan struct {
+		claimed bool
+		err     error
+	}, 2)
+	var ready sync.WaitGroup
+	ready.Add(2)
+	for _, conn := range []*pgxpool.Conn{first, second} {
+		go func(conn *pgxpool.Conn) {
+			ready.Done()
+			<-start
+			claimed, err := db.NewRepository(conn).TryMarkProcessing(ctx, id)
+			results <- struct {
+				claimed bool
+				err     error
+			}{claimed: claimed, err: err}
+		}(conn)
+	}
+	ready.Wait()
+	close(start)
+	wins := 0
+	for range 2 {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("concurrent claim: %v", result.err)
+		}
+		if result.claimed {
+			wins++
+		}
+	}
+	if wins != 1 {
+		t.Fatalf("winning claims = %d, want exactly one", wins)
+	}
+}
+
+func TestRepositoryProcessingAndDiagnosticPersistence(t *testing.T) {
+	ctx := context.Background()
+	id := insertIntegrationJob(t, ctx, "pending", stringPointer("previous diagnostic"))
+	repo := db.NewRepository(testPool)
+
+	claimed, err := repo.TryMarkProcessing(ctx, id)
+	if err != nil || !claimed {
+		t.Fatalf("claim pending job = (%v, %v), want (true, nil)", claimed, err)
+	}
+	var claimedStatus string
+	var clearedDiagnosis *string
+	if err := testPool.QueryRow(ctx, "SELECT status, error FROM jobs WHERE id = $1", id).Scan(&claimedStatus, &clearedDiagnosis); err != nil {
+		t.Fatalf("read claimed state: %v", err)
+	}
+	if claimedStatus != "processing" || clearedDiagnosis != nil {
+		t.Fatalf("claimed state = (%q, %v), want processing with cleared diagnosis", claimedStatus, clearedDiagnosis)
+	}
+	claimed, err = repo.TryMarkProcessing(ctx, id)
+	if err != nil || claimed {
+		t.Fatalf("claim processing job = (%v, %v), want (false, nil)", claimed, err)
+	}
+
+	safeReason := strings.Repeat("界", 1025)
+	updated, err := repo.RecordScrapeError(ctx, id, safeReason)
+	if err != nil || !updated {
+		t.Fatalf("record diagnostic = (%v, %v), want (true, nil)", updated, err)
+	}
+	var status, diagnosis string
+	if err := testPool.QueryRow(ctx, "SELECT status, error FROM jobs WHERE id = $1", id).Scan(&status, &diagnosis); err != nil {
+		t.Fatalf("read intermediate state: %v", err)
+	}
+	if status != "processing" || diagnosis != strings.Repeat("界", 1024) {
+		t.Fatalf("persisted state = (%q, %d characters), want processing and 1024 characters", status, len([]rune(diagnosis)))
+	}
+
+	for _, terminal := range []string{"completed", "failed"} {
+		t.Run(terminal, func(t *testing.T) {
+			terminalID := insertIntegrationJob(t, ctx, terminal, stringPointer("existing terminal diagnosis"))
+			claimed, err := repo.TryMarkProcessing(ctx, terminalID)
+			if err != nil || claimed {
+				t.Fatalf("claim %s job = (%v, %v), want (false, nil)", terminal, claimed, err)
+			}
+			updated, err := repo.RecordScrapeError(ctx, terminalID, "replacement")
+			if err != nil || updated {
+				t.Fatalf("update %s diagnostic = (%v, %v), want (false, nil)", terminal, updated, err)
+			}
+			var gotStatus, gotDiagnosis string
+			if err := testPool.QueryRow(ctx, "SELECT status, error FROM jobs WHERE id = $1", terminalID).Scan(&gotStatus, &gotDiagnosis); err != nil {
+				t.Fatalf("read terminal job: %v", err)
+			}
+			if gotStatus != terminal || gotDiagnosis != "existing terminal diagnosis" {
+				t.Errorf("terminal state = (%q, %q), want unchanged status and diagnosis", gotStatus, gotDiagnosis)
+			}
+		})
+	}
+}
+
+func insertIntegrationJob(t *testing.T, ctx context.Context, status string, diagnosis *string) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	if _, err := testPool.Exec(ctx, "INSERT INTO jobs (id, url, status, error) VALUES ($1, $2, $3, $4)", id, "https://example.com/integration", status, diagnosis); err != nil {
+		t.Fatalf("insert integration job: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := testPool.Exec(context.Background(), "DELETE FROM jobs WHERE id = $1", id); err != nil {
+			t.Errorf("delete integration job %s: %v", id, err)
+		}
+	})
+	return id
+}
+
+func stringPointer(value string) *string { return &value }
 
 // --- helpers ---
 

@@ -19,8 +19,9 @@ Stable IDs below are the authority for the visible todo projection. Source tasks
 
 | ID | Status | Deliverable | Allowed edit surfaces | Checks and acceptance |
 |---|---|---|---|---|
-| WS-00 | in_progress | Record approved plan and implementation units | `PLAN.md`, `odd/tasks/worker-scraper.md` | Structural readback, `git diff --check`; documentation has no meaningful RED |
+| WS-00 | done | Record approved plan and implementation units | `PLAN.md`, `odd/tasks/worker-scraper.md` | Structural readback, `git diff --check`; documentation has no meaningful RED |
 | WS-01 | pending | Atomic processing claim and safe intermediate diagnostic | `internal/db/repository.go`, `internal/db/repository_unit_test.go`, `internal/db/repository_test.go` | Observed RED/GREEN; `go test ./internal/db`, race and real PostgreSQL claim race/terminal protection |
+| WS-01V | in_progress | Verify real DB concurrency and resolve integration blocker | No source edits; local PostgreSQL/test DB only after explicit authorization | Authorized test-DB reset, real integration PASS, independent unit/race checks and SQL review; no application DB/volume deletion |
 | WS-02 | pending | Worker-only validated configuration and environment examples | `internal/config/config.go`, `internal/config/config_test.go`, `.env.example` | Observed RED/GREEN; `go test ./internal/config`; API Load compatibility, overflow/duration/name validation |
 | WS-03 | pending | Bounded Redis consumer operations | `internal/queue/consumer.go`, `internal/queue/consumer_test.go`, `internal/queue/consumer_integration_test.go` | Observed RED/GREEN; `go test ./internal/queue`; exact group/read/ACK semantics, cancellation and real Redis PEL |
 | WS-04 | pending | Public URL/IP policy and DNS-safe dialing | `internal/scraper/types.go`, `internal/scraper/network.go`, `internal/scraper/network_test.go` | Observed RED/GREEN; `go test ./internal/scraper`; all special/private/metadata/mapped/ambiguous addresses, mixed DNS, literal dial pinning |
@@ -44,20 +45,37 @@ PostgreSQL integration must use the existing isolated `inteldigest_test` convent
 - RDD: on (global; read-only `gentle-ai review mode status`). Assess each work-unit commit, inspect before offered START, follow only provider continuations. High/unassessable candidates are reviewed immediately; medium candidates may be reviewed at slice close; passive docs use structural checks.
 - Planning forecast: approximately 2,500–3,500 authored changed lines, including tests and docs, excluding generated files. This is an estimate, not an acceptance target.
 - Delivery strategy: `ask-on-risk`; user selected `chain_strategy=feature-branch-chain`. Keep `feat/worker-scraper` as the integrator and group reviewable work-unit commits into dependent slices. No PRs or publishing will be executed without separate authorization.
-- Running committed authored line count: 0. Planned slices: approval/tracking; DB claims; configuration; consumer; network policy; HTTP/extraction; processing; pool/shutdown; CLI; integration. Exact commit boundaries and native tier assessments will refine this grouping.
+- Running committed authored line count: 356 (`490644e`: 298 additions + 58 deletions). Planned slices: approval/tracking (`0f7dab6..490644e`); DB claims; configuration; consumer; network policy; HTTP/extraction; processing; pool/shutdown; CLI; integration. Exact commit boundaries and native tier assessments will refine this grouping.
 - Keep source, tests and relevant docs together; every task records commit ID, checks, runtime proof (or justified N/A), review tier/outcome and rollback boundary.
 
 ## Progress and evidence
 
-### WS-00 — in progress
+### WS-00 — complete
 
 - Applied both requested clarifications to PLAN.md and marked it approved.
 - Created branch `feat/worker-scraper` from `0f7dab6`.
 - `git diff --check -- PLAN.md`: PASS.
 - Read-only exploration `mut0yobq-1-rghf`: mapped repository and suggested units. Its clean-tree assertion was inaccurate: parent readback confirms modified PLAN.md and unrelated untracked `.codegraph/`; preserve both.
-- No source writes, tests, integration readiness check or implementation commits yet.
+- Commit: `490644e4893ebbad69eb7bd8f96b192ba7daeeac` — `docs(worker): record approved scraper plan and work units`; 298 additions/58 deletions, no source edits. `git diff --check`: PASS.
+- Native assessment unavailable: unrelated untracked `.codegraph/` requires declaration. Correct base resolved from Git: `0f7dab6724b7dad98542e48d6fab329b2370e0f3` (first assessment input was incorrect; no mutation resulted).
+- Native inspect excluded untracked paths; offered committed range START. START returned `review-5435fad14b4bdfdc`, low/non_executable_only, approved/action closed, no lenses. Bound STATUS then offered `empty_candidate_base_ref_required` for an empty current-changes projection; no acknowledged/consumed authority is claimed, no lifecycle replay or maintenance attempted.
+- Independent verifier `mut1mun2-2-zpwa`: both plan adjustments and implementable work-unit mapping confirmed; commit contains documentation only. `git diff --check 0f7dab6724b7dad98542e48d6fab329b2370e0f3 490644e4893ebbad69eb7bd8f96b192ba7daeeac`: PASS; `go test ./internal/db`: PASS with no default test files; `go test ./...`: PASS; `docker compose ps --status running`: PASS, zero running containers. These baseline passes are not WS-01 TDD evidence.
 - Runtime proof: N/A, documentation/tracking only. Rollback: approved plan/tracking documentation only, no runtime behavior.
+
+### WS-01 — implementation complete, verification pending
+
+- Route: delegated `gentle-ai-worker` task `mut1prrl-3-5i0q`, multi-file/test-preparation trigger. Strict TDD for conditional claim, rows affected, wrapped errors, safe diagnostic truncation and terminal-state protection. Allowed source surfaces are exactly the three DB files in the work-unit table; no commits/staging or service startup delegated.
+- Writer returned `partial`: implemented conditional claims and processing-only bounded diagnosis in repository.go; added DBTX fake tests and independent-connection integration tests. No API/schema changes or source commit yet.
+- Observed RED: `go test ./internal/db` failed to compile because both methods were undefined before implementation. GREEN/refactor: `go test ./internal/db`, `go test -race ./internal/db`, `go test ./...`, `git diff --check`: PASS. Added zero/one-row, context, wrapped errors and ASCII/Unicode boundary coverage; diagnostic cap is a named constant.
+- `DATABASE_URL='postgres://inteldigest:inteldigest@localhost:5432/inteldigest?sslmode=disable' go test -tags=integration ./internal/db`: FAIL before tests, connection refused. Real concurrency and persisted-state assertions remain unverified.
+- Existing integration TestMain drops/recreates `inteldigest_test` then drops it at cleanup. Parent spot check confirmed this and local Compose postgres with persistent `pgdata`; explicit authorization is required before retrying reset. Never delete the application DB or volume.
+- Post-writer ASSESS returned unassessable due undeclared untracked files, with independent verification required. No native source transaction started while integration remains partial.
+- User explicitly authorized `docker compose up -d postgres` and the existing harness reset of ONLY `inteldigest_test`. Existing data in that test DB may be lost; application `inteldigest` and `pgdata` must remain untouched. Parent executed `docker compose up -d postgres`: PASS, local postgres container started; readiness still requires a probe. Service remains running by the disclosed choice.
+- Independent verifier `mut4fepr-4-x1wv` returned COMPLETE, zero defects. Readiness via `docker compose exec -T postgres pg_isready -U inteldigest -d inteldigest`: PASS; `go test ./internal/db`: PASS; `go test -race ./internal/db`: PASS; approved local DSN `go test -tags=integration -count=1 ./internal/db`: PASS (0.092s); sequential `go test -race -tags=integration -count=1 ./internal/db`: PASS (1.091s); `go test ./...`: PASS; `git diff --check`: PASS. No checks skipped or pending for functional DB verification.
+- Runtime proof: real PostgreSQL test acquires independent connections against a committed row, barrier-releases claims and asserts exactly one winner; intermediate 1024-rune diagnosis persisted while processing; completed/failed rows rejected claims/updates unchanged. Only authorized testDB reset; application DB/volume preserved, service remains running.
+- Parent source spot check confirms conditional SQL, one-row gate and error wrapping. Rollback boundary: remove the three DB source/test changes; no API/schema changes.
+- WS-01 and WS-01V await the same coherent DB work-unit commit and native candidate routing. The verification blocker is not a separate source feature.
 
 ## Next step
 
-The user selected the feature/tracker branch chain. Commit approved plan/tracking as WS-00, then delegate WS-01 with strict TDD. Maintain one in-progress task; synchronize local document, full Engram mirror `odd/worker-scraper/tasks` and visible todo after each transition.
+Commit the verified DB unit with its tests/evidence, assess/inspect the exact committed candidate against `490644e4893ebbad69eb7bd8f96b192ba7daeeac`, follow native routing, then close WS-01/WS-01V and start WS-02. Native source review will use the exact source work-unit boundary, not the tracking delta or cumulative feature branch. Maintain one in-progress task; synchronize local document, full Engram mirror `odd/worker-scraper/tasks` and visible todo after each transition.
