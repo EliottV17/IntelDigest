@@ -88,10 +88,10 @@ Añadir `internal/worker` para orquestación independiente de Redis, SQL y HTTP 
 
 ### SIGINT/SIGTERM
 
-1. Cancelar el contexto de admisión para interrumpir lecturas bloqueantes y evitar nuevos claims. Una entrega recibida durante esa carrera se deja sin ACK si aún no comenzó.
-2. Dar a trabajos en vuelo una ventana de drenaje de `WORKER_SHUTDOWN_TIMEOUT` (default `10s`), manteniendo abiertos DB y Redis.
+1. Cancelar el contexto de admisión para impedir nuevas lecturas y nuevos claims. Una lectura ya bloqueada no se interrumpe inmediatamente en el socket de `go-redis`: termina dentro de su presupuesto finito (`WORKER_STREAM_BLOCK` + `WORKER_QUEUE_OPERATION_TIMEOUT`, default `7s`; normalmente al vencer el BLOCK de `2s`). Revisar la cancelación al retornar antes de reclamar; una entrega recibida durante esa carrera se deja sin ACK si aún no comenzó.
+2. Dar a trabajos en vuelo una ventana de drenaje de `WORKER_SHUTDOWN_TIMEOUT` (default `10s`), manteniendo abiertos DB y Redis. Esta ventana comienza al cancelar admisión y corre en paralelo con la salida de los lectores, no después de ella.
 3. Al vencerla, cancelar el contexto de procesamiento: solicitudes HTTP, resolución, dial, lectura y operaciones DB deben respetarlo. La cancelación de apagado no es un fallo de negocio ni se ACKea.
-4. Esperar el `WaitGroup` antes de cerrar clientes/pool de PostgreSQL. No cerrar recursos que todavía usan goroutines ni descartar resultados mediante goroutines huérfanas.
+4. Esperar el `WaitGroup` de todos los lectores y trabajos antes de cerrar clientes/pool de PostgreSQL. Si el presupuesto de lectura configurado supera la ventana de drenaje, el cierre total puede superar esa ventana; no imponer `lectura <= drenaje` como requisito de seguridad ni anunciar un deadline duro de salida. No cerrar recursos que todavía usan goroutines ni descartar resultados mediante goroutines huérfanas.
 
 El extractor HTML elegido es síncrono y no ofrece cancelación cooperativa en su API. Se revisa el contexto antes/después de parsear y se limita estrictamente su entrada; si SIGTERM llega durante el parseo, se espera a que esa llamada termine. Los `10s` son ventana de drenaje, **no garantía de interrupción dura del CPU del parser**. No envolverlo en una goroutine que se abandona al cancelar. Un SIGKILL externo puede dejar `processing`/PEL; no se presume apagado limpio en ese caso.
 
