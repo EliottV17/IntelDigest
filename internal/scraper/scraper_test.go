@@ -769,6 +769,144 @@ func TestBodyLimitExactMaxMaxPlusOneAndChunked(t *testing.T) {
 	}
 }
 
+func TestScrapeWithStatsCountsDecompressedGzipBodyNotText(t *testing.T) {
+	body := readFixture(t, "article.html")
+	compressed := gzipBytes(t, body)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Header().Set("Content-Encoding", "gzip")
+		_, _ = w.Write(compressed)
+	}))
+	defer server.Close()
+	trig := newScraperRig(t, DefaultOptions(), server, nil, nil, nil)
+	article, stats, err := trig.scraper.ScrapeWithStats(context.Background(), "http://news.example/gzip-stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.BytesRead != int64(len(body)) || stats.BytesRead == int64(len(compressed)) || stats.BytesRead == int64(len(article.Text)) {
+		t.Fatalf("BytesRead=%d decompressed=%d compressed=%d text=%d", stats.BytesRead, len(body), len(compressed), len(article.Text))
+	}
+}
+
+func TestScrapeWithStatsCountsOriginalCharsetBytesAndRetainsAfterExtractionFailure(t *testing.T) {
+	body := append([]byte("<html><body><article>caf"), append([]byte{0xe9}, []byte("</article></body></html>")...)...)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=iso-8859-1")
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+	cause := errors.New("extractor failed")
+	extractor := articleExtractor(func(input io.Reader, _ *url.URL) (extractedArticle, error) {
+		decoded, err := io.ReadAll(input)
+		if err != nil {
+			return extractedArticle{}, err
+		}
+		if !bytes.Contains(decoded, []byte("café")) || len(decoded) <= len(body) {
+			return extractedArticle{}, fmt.Errorf("charset was not expanded: %q", decoded)
+		}
+		return extractedArticle{}, cause
+	})
+	trig := &scraperRig{server: server}
+	trig.scraper = mustNewScraper(t, DefaultOptions(), resolverFunc(func(context.Context, string, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("8.8.8.8")}, nil
+	}), dialFunc(func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
+	}), extractor, nil, nil)
+	_, stats, err := trig.scraper.ScrapeWithStats(context.Background(), "http://news.example/latin1-stats")
+	assertScrapeError(t, err, ScrapeErrorExtraction, ScrapeStageExtract, 0)
+	if !errors.Is(err, cause) || stats.BytesRead != int64(len(body)) {
+		t.Fatalf("stats=%+v err=%v want raw body bytes=%d and preserved cause", stats, err, len(body))
+	}
+}
+
+func TestScrapeWithStatsZeroBeforeCompleteBodyAndLegacyCompatibility(t *testing.T) {
+	body := readFixture(t, "article.html")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/status" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		if r.URL.Path == "/redirect" {
+			w.Header().Set("Location", "/article")
+			w.WriteHeader(http.StatusFound)
+			_, _ = io.WriteString(w, "redirect response body is not counted")
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+	now := time.Date(2025, 3, 4, 5, 6, 7, 0, time.UTC)
+	trig := newScraperRig(t, DefaultOptions(), server, nil, nil, func() time.Time { return now })
+	_, early, err := trig.scraper.ScrapeWithStats(context.Background(), "not a URL")
+	if err == nil || early.BytesRead != 0 {
+		t.Fatalf("invalid URL stats=%+v err=%v", early, err)
+	}
+	_, early, err = trig.scraper.ScrapeWithStats(context.Background(), "http://news.example/status")
+	assertScrapeError(t, err, ScrapeErrorHTTPStatus, ScrapeStageFetch, http.StatusServiceUnavailable)
+	if early.BytesRead != 0 {
+		t.Fatalf("status response stats=%+v, want zero", early)
+	}
+	_, legacyStatusErr := trig.scraper.Scrape(context.Background(), "http://news.example/status")
+	legacyStatus := assertScrapeError(t, legacyStatusErr, ScrapeErrorHTTPStatus, ScrapeStageFetch, http.StatusServiceUnavailable)
+	statsStatus := assertScrapeError(t, err, ScrapeErrorHTTPStatus, ScrapeStageFetch, http.StatusServiceUnavailable)
+	if legacyStatus.Kind != statsStatus.Kind || legacyStatus.Stage != statsStatus.Stage || legacyStatus.HTTPStatus != statsStatus.HTTPStatus {
+		t.Fatalf("legacy status error=%+v differs from stats API error=%+v", legacyStatus, statsStatus)
+	}
+	_, redirected, err := trig.scraper.ScrapeWithStats(context.Background(), "http://news.example/redirect")
+	if err != nil || redirected.BytesRead != int64(len(body)) {
+		t.Fatalf("redirect stats=%+v err=%v, want only final body bytes=%d", redirected, err, len(body))
+	}
+	legacy, err := trig.scraper.Scrape(context.Background(), "http://news.example/article")
+	if err != nil {
+		t.Fatal(err)
+	}
+	withStats, stats, err := trig.scraper.ScrapeWithStats(context.Background(), "http://news.example/article")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy != withStats || stats.BytesRead != int64(len(body)) {
+		t.Fatalf("legacy article differs: legacy=%+v withStats=%+v stats=%+v", legacy, withStats, stats)
+	}
+}
+
+func TestScrapeWithStatsConcurrentCallsRemainIndependent(t *testing.T) {
+	bodies := map[string][]byte{"/short": exactHTML(80), "/long": exactHTML(120)}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write(bodies[r.URL.Path])
+	}))
+	defer server.Close()
+	extractor := articleExtractor(func(io.Reader, *url.URL) (extractedArticle, error) {
+		return extractedArticle{text: "independent"}, nil
+	})
+	trig := &scraperRig{server: server}
+	trig.scraper = mustNewScraper(t, DefaultOptions(), resolverFunc(func(context.Context, string, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("8.8.8.8")}, nil
+	}), dialFunc(func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
+	}), extractor, nil, nil)
+	type result struct {
+		path  string
+		stats ScrapeStats
+		err   error
+	}
+	results := make(chan result, len(bodies))
+	for path := range bodies {
+		path := path
+		go func() {
+			_, stats, err := trig.scraper.ScrapeWithStats(context.Background(), "http://news.example"+path)
+			results <- result{path: path, stats: stats, err: err}
+		}()
+	}
+	for range bodies {
+		got := <-results
+		if got.err != nil || got.stats.BytesRead != int64(len(bodies[got.path])) {
+			t.Errorf("%s stats=%+v err=%v, want %d bytes", got.path, got.stats, got.err, len(bodies[got.path]))
+		}
+	}
+}
+
 func TestAutomaticGzipDecodingProducesArticleText(t *testing.T) {
 	compressed := gzipBytes(t, readFixture(t, "article.html"))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

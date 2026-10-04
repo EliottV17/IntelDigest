@@ -140,6 +140,8 @@ Fijar una versión compatible con el Go del proyecto al implementar, sin depende
 | `Language string` | Idioma declarado/extraído, opcional; no inferido por IA aquí |
 | `FetchedAt time.Time` | Instante UTC de descarga |
 
+Para la observabilidad técnica, `ScrapeWithStats(ctx, rawURL)` devuelve también `ScrapeStats.BytesRead`: bytes del cuerpo final descomprimido después de una lectura acotada completa, antes de convertir charset o extraer texto. La métrica es local a cada llamada, permanece en cero hasta disponer del cuerpo completo y no representa bytes TCP/TLS, cuerpos de redirects ni longitud del texto. `Scrape(ctx, rawURL) (Article, error)` conserva su firma y los seis campos de `Article` no cambian; las estadísticas no se entregan a IA ni se guardan en un mapa compartido.
+
 `internal/worker` entrega al receptor una salida con `JobID uuid.UUID`, `Article` si hubo éxito o `ScrapeError` si hubo fallo. ID de Stream/grupo/consumer quedan en el contexto de orquestación para la futura consolidación, no en el input de IA. El scraper no conoce `job_id` y el cliente de IA no dependerá de Redis.
 
 El receptor es una interfaz síncrona/contextual para conectar la siguiente etapa sin acoplar el scraper a OpenRouter. En esta tarea `cmd/worker` conecta un receptor explícito que registra solo metadata técnica del resultado y **no almacena ni loggea `Text`**. Tests conectan un fake que comprueba el contrato completo. No se publica otro Stream, no se persiste HTML/texto ni se guardan resultados en un mapa creciente.

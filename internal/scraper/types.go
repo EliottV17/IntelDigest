@@ -15,6 +15,17 @@ type Article struct {
 	FetchedAt    time.Time
 }
 
+// ScrapeStats contains per-call fetch measurements. BytesRead is the number of
+// decompressed final-response body bytes obtained after a successful bounded
+// body read, before charset conversion or extraction. It excludes redirect
+// bodies and is not a transport-byte or extracted-text length. It remains zero
+// until the complete body is available; failures before then do not report
+// partial reads. If decoding or extraction later fails, the completed body count
+// is retained.
+type ScrapeStats struct {
+	BytesRead int64
+}
+
 type ScrapeErrorKind string
 
 const (
