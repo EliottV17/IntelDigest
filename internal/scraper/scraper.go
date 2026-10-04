@@ -125,6 +125,19 @@ func validateScraperOptions(options ScraperOptions) error {
 // Scrape validates, fetches and extracts an article. It makes no external
 // requests except to the requested public URL and policy-approved redirects.
 func (s *Scraper) Scrape(parent context.Context, rawURL string) (Article, error) {
+	article, _, err := s.ScrapeWithStats(parent, rawURL)
+	return article, err
+}
+
+// ScrapeWithStats performs the same scrape as Scrape and returns measurements
+// local to this invocation.
+func (s *Scraper) ScrapeWithStats(parent context.Context, rawURL string) (Article, ScrapeStats, error) {
+	var stats ScrapeStats
+	article, err := s.scrape(parent, rawURL, &stats)
+	return article, stats, err
+}
+
+func (s *Scraper) scrape(parent context.Context, rawURL string, stats *ScrapeStats) (Article, error) {
 	if parent == nil {
 		return Article{}, &ScrapeError{Kind: ScrapeErrorCanceled, Stage: ScrapeStageFetch, Message: "scrape context is unavailable"}
 	}
@@ -194,6 +207,7 @@ func (s *Scraper) Scrape(parent context.Context, rawURL string) (Article, error)
 		if readErr != nil {
 			return Article{}, classifyScrapeFailure(hopCtx, readErr, readErr)
 		}
+		stats.BytesRead = int64(len(body))
 		if err := ctx.Err(); err != nil {
 			return Article{}, scrapeContextError(err)
 		}
