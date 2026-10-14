@@ -19,6 +19,8 @@
 - Propagar `context.Context`, cancelación y límites de tiempo. Evitar goroutines ilimitadas y colas de memoria sin cota.
 - Configuración por variables de entorno, sin cargadores dotenv en la aplicación.
 - Identificadores, comentarios de código y mensajes de commit en inglés; documentación existente del proyecto en su idioma correspondiente.
+- Al terminar cada sección o unidad de implementación, y cuando un cambio lo requiera, revisar y actualizar el README y/o el diagrama afectado en la misma unidad. Reflejar el comportamiento realmente implementado y sus límites; no marcar funcionalidades previstas como terminadas.
+- Los diagramas de flujo y arquitectura deben usar bloques Mermaid con `flowchart`; no usar esquemas ASCII. El README representa el estado actual y PLAN.md el objetivo, claramente diferenciado.
 - Cuando cambien comandos, configuración, mensajes o contratos, actualizar la documentación relacionada en la misma unidad.
 
 ## Límites arquitectónicos y contratos
