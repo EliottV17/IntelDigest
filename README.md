@@ -2,6 +2,12 @@
 
 IntelDigest accepts technical-article URLs, persists digest jobs, and publishes them for later processing. A manually launched worker can now consume new Redis Stream entries and scrape public HTML. Its synchronous result receiver is metadata-only and nondurable: jobs remain `processing` and entries stay unacknowledged until a later persistence/consolidation stage exists.
 
+## Documentation
+
+- [PLAN.md](PLAN.md): the single project goal, completed milestones, remaining work, and portfolio scope.
+- [AGENTS.md](AGENTS.md): coding conventions, build/check commands, and internal working rules.
+- This README: current behavior, configuration, and local usage. It is not a second roadmap.
+
 ## Architecture and current status
 
 ```
@@ -18,13 +24,12 @@ Client ──POST /api/v1/digests──▸ API ──persist job──▸ Postgr
 | PostgreSQL | 17-alpine | Persists jobs and results (JSONB) |
 | Redis | 7-alpine Streams | Receives API-published job messages; the worker creates/uses a shared consumer group |
 | Worker and scraper | Go, Redis Streams, bounded HTTP | CLI wiring and fake-tested startup are implemented; live end-to-end operation is not verified |
-| OpenRouter and frontend | — | Not implemented |
 
 The Stream entry's `data` field contains JSON with `schema_version`, `job_id`, and `url`. PostgreSQL remains the source of truth for job state.
 
 ## Requirements
 
-- Go 1.22+
+- Go 1.27.1, as declared in `go.mod`
 - Docker and Docker Compose
 - `psql` for manual migrations and PostgreSQL integration tests
 - `curl` and `jq` for endpoint checks
@@ -162,5 +167,6 @@ internal/
   models/         # Job model and URL validation
   queue/          # Redis Streams publisher and message contract
   scraper/        # Public-URL policy, bounded fetching, and article extraction
+  worker/         # Job processor, synchronous receiver, and fixed worker pool
 migrations/       # Versioned SQL migrations
 ```
