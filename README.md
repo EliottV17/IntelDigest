@@ -10,12 +10,21 @@ IntelDigest accepts technical-article URLs, persists digest jobs, and publishes 
 
 ## Architecture and current status
 
-```
-Client ──POST /api/v1/digests──▸ API ──persist job──▸ PostgreSQL
-                                  │                       ▲
-                                  └──publish──▸ Redis Streams ──consume──▸ Worker ──fetch──▸ Public HTML
-                                                                          │
-                                                                          └──metadata-only, in-memory handoff
+This flowchart describes the implemented pipeline only. The planned Next.js frontend, AI processing, and deployment are tracked in [PLAN.md](PLAN.md).
+
+```mermaid
+flowchart LR
+    Client[HTTP client] -->|POST URL| API[Go API]
+    API -->|Persist pending job| DB[(PostgreSQL)]
+    API -->|Publish job| Queue[(Redis Streams)]
+    Queue -->|Read new entries| Worker[Go worker pool]
+    Worker -->|Atomic claim and diagnostics| DB
+    Worker --> Scraper[Safe scraper]
+    Scraper -->|Fetch public HTML| Web[Public article]
+    Scraper -->|Article or typed error| Receiver[Metadata-only receiver]
+    Receiver --> Limit[In-memory handoff only: no digest persistence or normal ACK]
+    Client -->|GET job| API
+    API -->|Read job state| DB
 ```
 
 | Component | Technology | Status |
