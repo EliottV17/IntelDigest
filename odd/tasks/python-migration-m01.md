@@ -9,7 +9,7 @@ Entrega: `ask-on-risk`, una unidad documental (~250 líneas nuevas); checks estr
 
 ## Tasks
 
-- M01 [S1–S2] — in_progress (inventario y checks completos; registrando commit); ruta: exploración delegada C1–C10 + redacción delegada por backstop de contexto; commit: pendiente; alcance: documentación de baseline y este ledger, sin cambios de comportamiento.
+- M01 [S1–S2] — done; ruta: exploración delegada C1–C10 + redacción delegada por backstop de contexto; commit de entrega: `9b059625344756ff185beee656c6d66a806befe1`; evidencia: validación estructural y tests/build/vet exit 0; solo baseline y ledger, sin cambios de comportamiento.
 
 ## Log
 
@@ -42,4 +42,7 @@ lee plan migration y de aqui iniciamos la migración desde la primera tarea de l
 - Native ASSESS sobre archivos aún no versionados: `nativeRisk=unassessable` por requerir declaración explícita de untracked; sin tier nativo verificable ni aprobación. Plan devuelto: self-verification sí, independentVerifier no; no hay ítem de alto riesgo porque solo se describe comportamiento existente.
 - No aplica RED/GREEN ni comparación diferencial: no cambió comportamiento. Integración y race no ejecutados; M01 documental no los requiere. No se inicia review nativa por checkbox ni se interpreta una evaluación fallida como tier bajo.
 - Alcance del commit local: exclusivamente baseline y ledger (~230 líneas); `PLAN-MIGRATION.md` sigue sin versionar, intacto. Sin push/PR/merge.
+- Commit de entrega observado: `9b059625344756ff185beee656c6d66a806befe1`, `docs(migration): capture backend compatibility baseline`, 2 archivos, 225 inserciones. `git diff --cached --check` → exit 0 antes del commit.
+- ASSESS del rango committed-only desde la base también devolvió `unassessable` por el plan humano sin versionar; evaluación nativa no disponible, sin aprobación ni review iniciada. No se reintenta ni se altera el archivo humano para resolverlo; no falta un verificador independiente aplicable a este cambio documental.
+- Este cierre agrega únicamente evidencia del SHA y estado final en el ledger, en un commit local de registro. El SHA de entrega anterior identifica el inventario; no se intenta una autorreferencia de hash.
 - Próxima tarea del plan: M02, **no iniciada ni autorizada**. Detención requerida por S2.
