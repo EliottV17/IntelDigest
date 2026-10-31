@@ -1,6 +1,6 @@
-# Migración Python — B0: baseline y tooling
-Objetivo actual: M02 y detenerse antes de M03; rama `migration/python-foundation`; base M02 `298a5d60b6ee82d1426e1415aab847e036b4b4c9`.
-Entrega: un commit por M; estrategia `ask-on-risk`; M02 ~300 líneas authored más lock generado; checks de paquete Python y Go, sin servicios.
+# Migración Python — B0: baseline, tooling y configuración
+Estado: M03 verificada y cerrada; detenerse antes de M04; rama hija `migration/python-foundation-config`; base M03 `df0b783199ed866b83120911686a78701da4877f`.
+Entrega: un commit por M; estrategia `auto-chain`, `feature-branch-chain`; checks Python/Go sin servicios; M03 concentra módulo, regresiones y docs en una única unidad de compatibilidad.
 
 ## Specs
 
@@ -8,13 +8,15 @@ Entrega: un commit por M; estrategia `ask-on-risk`; M02 ~300 líneas authored m�
 - S2: «Cuando termines no implementes la siguiente y me dices que hiciste, no info detallada de cada línea de código sino lo que implementaste por encima, decisiones, arquitectura, etc. de manera acotada no muy extensa.»
 
 - S3: «Ahora procede con M02 y M03, por cada M hecho haces un commit, cuando termines uno, me haces un resumen lo que hiciste y esperas a mi confirmación para que termines con M03». Referencia M02 en [PLAN-MIGRATION.md](../../PLAN-MIGRATION.md): «Paquete Python instalable, dependencias justificadas/bloqueadas, runner de tests y guía sin dotenv».
-- S4: Referencia M03: «Cargadores separados API/worker, defaults, límites y duraciones compatibles; tests sin conexiones externas». Su ejecución espera la confirmación humana posterior a M02, conforme a S3.
+- S4: Referencia M03: «Cargadores separados API/worker, defaults, límites y duraciones compatibles; tests sin conexiones externas». La confirmación requerida por S3 fue otorgada en S5.
+- S5: «ya lo revisé, continua con el M03».
+- S6: Selección humana de revisión: «Cadena desde rama de migración — recomendada». No modifica la regla S3 de un commit por M ni autoriza publicación.
 
 ## Tasks
 
 - M01 [S1–S2] — done; ruta: exploración delegada C1–C10 + redacción delegada por backstop de contexto; commit de entrega: `9b059625344756ff185beee656c6d66a806befe1`; evidencia: validación estructural y tests/build/vet exit 0; solo baseline y ledger, sin cambios de comportamiento.
-- M02 [S3] — done (implementación y checks observados); ruta: worker por backstop de contexto + verificación independiente; Risk: item 5 (dependencias/entorno); único commit identificado por `build(python): establish reproducible backend tooling` desde base `298a5d60b6ee82d1426e1415aab847e036b4b4c9`; SHA real en espejo Engram tras el commit, sin commit extra de bookkeeping.
-- M03 [S3–S4] — blocked; espera confirmación humana expresa después del resumen de M02; no implementar configuración todavía; commit: no creado.
+- M02 [S3] — done; ruta: worker por backstop de contexto + verificación independiente; Risk: item 5 (dependencias/entorno); único commit `df0b783199ed866b83120911686a78701da4877f`, `build(python): establish reproducible backend tooling`.
+- M03 [S3–S6] — done; ruta: worker por backstop de contexto + verify independiente y recheck acotado PASS; Risk: item 3 (contrato público de entorno); único commit identificado por `feat(config): preserve backend environment contracts` desde base `df0b783199ed866b83120911686a78701da4877f`; SHA real en espejo Engram tras observar commit, sin commit extra de bookkeeping.
 
 ## Log
 
@@ -87,4 +89,49 @@ Ahora procede con M02 y M03, por cada M hecho haces un commit, cuando termines u
 - RDD: evaluación nativa no disponible por declaración untracked; sin aprobación ni review iniciada. Se cumplió la verificación independiente del plan de ASSESS por item 5. No se modifica el plan humano ni se repite la evaluación fallida para forzar clasificación.
 - Go, SQL, Makefile, PLAN y AGENTS permanecen intactos frente a base M02; README solo agrega enlace. No se implementó configuración, API, worker o scraping Python. No se ejecutó integración, race, servicios ni migraciones; no son checks de M02.
 - Único commit local M02: código/tooling, lock, tests, docs y ledger juntos, mensaje `build(python): establish reproducible backend tooling`. Se resuelve su identidad con `git log --format=%H --grep='^build(python): establish reproducible backend tooling$' -1`; memoria recibe SHA observado después, sin autorreferencia imposible ni segundo commit.
-- Detención expresa S3: «cuando termines uno, me haces un resumen lo que hiciste y esperas a mi confirmación para que termines con M03». Se entrega resumen M02 y se espera; M03 no iniciada. Sin push/PR/merge.
+- Detención expresa S3 al cerrar M02: «cuando termines uno, me haces un resumen lo que hiciste y esperas a mi confirmación para que termines con M03». Esa confirmación posterior se registra en L7. Sin push/PR/merge.
+
+### L7 — Confirmación M03 y estrategia de revisión
+
+ya lo revisé, continua con el M03
+
+- Estado reconciliado: M02 terminado en `df0b783199ed866b83120911686a78701da4877f`; solo PLAN-MIGRATION.md humano untracked; no editar/versionar ese archivo ni acceder dotenv.
+- Selección humana tras consulta de presupuesto: «Cadena desde rama de migración — recomendada». Se conserva como decisión estable `delivery_strategy=auto-chain`, `chain_strategy=feature-branch-chain` para no preguntar otra vez. La cadena sigue siendo local; no autoriza push, PR ni merge.
+- Slice 1: `migration/python-foundation`, M01/M02 hasta df0b783 (389 líneas manuales netas frente a 4873431, excluyendo 790 líneas generadas de uv.lock). Slice 2: rama hija `migration/python-foundation-config` desde df0b783, exclusivamente M03; mantiene la dependencia B0 del plan, sin producto adicional. Próximas ramas no se crean ahora.
+- Rutas permitidas al worker: `backend/src/inteldigest/config.py`, `backend/tests/test_config.py`, `backend/README.md`, `README.md` (solo estado/enlace de configuración). Sin cambios a Go, SQL, lock, dependencias, Makefile ni nuevos entrypoints.
+- M03 porta nombres y semántica del entorno desde internal/config/config.go y escenarios config_test.go; loaders API/worker separados, valores por defecto/límites, diferencias unset/empty, nombre worker generado, duraciones Go y control de overflow; errores seguros, sin secretos ni I/O a servicios.
+- Scope C10 y límites de C8; no cambia política SSRF, no implementa red/DB/worker/API Python y no avanza M04. No Pydantic coerciones automáticas ni conversiones que pierdan precisión de nanosegundos inadvertidamente.
+- Checks: RED de reglas por interfaz pública antes del source; GREEN focalizado y suite Python; regresión de smoke M02; compatibilidad contra referencia Go y/o ejemplos observados con estado aislado. Preservar código/salidas/exit de comandos, sin servicios ni integración. El parser nuevo no modifica helpers Go compartidos, por lo que no aplica diferencial de regresión Go por cambio de código compartido.
+- Risk: item 3 (contrato público de configuración cuyo port debe evitar cambios no solicitados). Verificación independiente requerida después de self-check y ASSESS; native review solo según switch y ruta provider, sin inferir aprobación si assessment no disponible.
+- El volumen previsto se concentra en una sola conducta de compatibilidad; se conserva el único commit M03 pedido por S3, sin quitar tests ni fragmentar artificialmente por presupuesto. Reversión: solo módulo/config tests y documentación asociada de M03.
+- SHA real de único commit se registra en espejo Engram después de observarlo; ledger en el commit lo identifica por mensaje y base, evitando commit adicional de bookkeeping.
+
+### L8 — M03 implementada; paridad aún no satisfecha
+
+- Worker `mvvoglle-5-vwf4`: módulo config.py pasivo con dataclasses inmutables, load_api/load_worker y duraciones enteras ns; tests/config y docs. RED colección sin módulo → ModuleNotFoundError, exit 2; GREEN focalizado 61 y suite completa 62 tests; Go internal/config y git diff --check exit 0. Sin stage/commit ni cambios Go/dependencias.
+- Lectura del padre detectó dos posibles discrepancias de duración/URL. Probe público reproducido: `REDIS_DIAL_TIMEOUT=1s0` aceptado incorrectamente; `REDIS_URL=redis://cache/a` devuelve error genérico de host en lugar del específico `database path must be a non-negative integer`. Script con aserciones sobre salida pública → exit 1 (RED observado, no check pasado).
+- ASSESS con escalate item 3 no devolvió envelope por fallo del tool; no se infiere clasificación ni aprobación y no se reintenta. La verificación independiente se requiere igualmente por Risk item 3 ya declarado.
+- Verificador `mvvoqe8c-6-3cag` terminó FAIL: matriz pública Go/Python 167 casos, 144 iguales y 23 discrepancias en 7 clases de blockers; suite Python existente 62 verdes no los detectaba. Go config tests scratch exit 0. Sin servicios/dotenv ni cambios al checkout.
+- Blockers corroborados: cola cero sin unidad en duraciones (1s0/2h0/500ms0/1m0); motivo exacto de database path ocultado; DB int64 overflow aceptado; schemes Redis mayúsculas rechazados; puertos no numéricos aceptados; bracket host inválido aceptado; espacios de query rechazados indebidamente. No se aceptan diferencias contractuales.
+- La prueba de os.environ omitido también falla con REDIS_DIAL_TIMEOUT=invalid heredado (reproducción exit 1); aislar el entorno de ese test durante la corrección para mantener el runner determinista. Advisory privado MinInt64 negativo no altera loaders públicos (rechazan negativos), no agrega un requisito nuevo.
+- Se inició única corrección conjunta del worker original, con tests públicos RED específicos y mensajes exactos. Su evidencia está en L9; solo reverify de los blockers, sin nueva exploración ni sweep. M03 continúa in_progress, ningún commit aún.
+
+### L9 — Corrección conjunta y GREEN del padre
+
+- Worker de corrección `mvvp2p72-7-k8un`: solo config.py y test_config.py. RED antes de source: 22 failed, 61 passed, exit 1. GREEN: 85 config y 86 suite, exit 0; test con REDIS_DIAL_TIMEOUT=invalid heredado → 1 passed; Go internal/config y diff check exit 0.
+- Cambios: rechazar cero final sin unidad, tipo de error DB específico sin enmascararlo, límite Atoi int64 DB, scheme case-insensitive conservando URL raw, validación sintáctica de puerto/brackets sin imponer rango de conexión, query con espacios permitidos; aislar opcionales del test os.environ.
+- Padre, estado corregido: `uv run --no-env-file --frozen --offline python -m pytest tests/test_config.py -q` → 85 passed; mismo runner suite completa → 86 passed; replay de los dos probes RED → stdout `PASS: both parent RED probes now GREEN with exact public errors.`, exit 0. Flags UV_CACHE_DIR local, UV_PYTHON_DOWNLOADS=never, UV_NO_ENV_FILE=1. Sin servicios ni dotenv.
+- Padre: `GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go test -count=1 ./...` → ocho paquetes OK y cmd/api sin tests, exit 0. Go source/SQL/Makefile/dependencias intactos mediante git diff exit 0 frente a df0b783.
+- ASSESS del nuevo candidato corregido devolvió envelope: nativeRisk unassessable por declaración untracked; escalate item 3 aplicado, self-verification e independentVerifier requeridos. Sin candidato/reviewDue provisto ni aprobación; no ejecutar START inferido ni repetir evaluación fallida. Verificación independiente inicial + recheck cubren ese requisito, no native review.
+- Recheck independiente `mvvp98he-8-48i2`, limitado a 23 casos discrepantes/7 clases y sentinels contiguos, terminó PASS; evidencia final en L10.
+
+### L10 — Cierre verificado M03
+
+- Recheck independiente: 23/23 blockers anteriores corregidos y 6/6 sentinels compatibles, exit 0; sin blockers previos restantes. Verificó solo las clases reportadas, no una promesa de equivalencia exhaustiva de cualquier entrada imaginable.
+- Pruebas de corrección: 28 passed, 57 deselected; entorno heredado inválido: 1 passed, 84 deselected; suite aislada: 86 passed. Todas exit 0. Scratch explícito sin dotenv, offline; `PYTHONPATH=src` apuntó a copia aislada para compatibilidad de código M03, no se presenta como prueba de wheel instalada (M02 tiene esa evidencia).
+- API pública Python: `load_api(env=None)` y `load_worker(env=None)`, valores inmutables; mappings explícitos para pruebas o os.environ al omitir; duraciones enteras `_ns`, defaults/límites, consumidor único, y validación sin DNS ni conexiones/logs. Sin entrypoints ni implementación operativa Python.
+- Se preservaron los errores exactos de las discrepancias detectadas sin credenciales; rechazos comprobados sin mutar mapping ni stdout/stderr donde corresponde. Suite M02 sigue verde.
+- No se ocultan checks fallidos iniciales: RED de módulo ausente exit 2, comparación inicial FAIL 23/167, probes del padre exit 1 y regressions previas a corrección 22 failed. Todos los blockers corroborados cerraron después con GREEN; diferencia aceptada de contrato: ninguna.
+- Native ASSESS final: no disponible por archivos untracked, sin aprobación/receipt. Risk item 3 verificado independientemente; no se infiere START ni se repite un fallo para forzar clasificación. Integración/race/servicios/migraciones omitidos por alcance: loaders pasivos y sin cambio Go. Go suite actual exit 0.
+- Commit único de M03, con comportamiento/tests/docs/ledger juntos: `feat(config): preserve backend environment contracts`; referencia recuperable con `git log --format=%H --grep='^feat(config): preserve backend environment contracts$' -1`, SHA real guardado en espejo después del commit. El volumen responde a una sola área de compatibilidad con regresiones explícitas; se mantiene S3 (un commit por M) y rama hija separada para revisión según S6.
+- Límite final: M04 no autorizada ni iniciada. PLAN-MIGRATION.md humano permanece intacto sin versionar; Go, SQL, dependencias y Makefile intactos. Sin push/PR/merge; entrega de resumen acotado y detención al terminar M03.
