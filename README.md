@@ -5,7 +5,7 @@ IntelDigest accepts technical-article URLs, persists digest jobs, and publishes 
 ## Documentation
 
 - [PLAN.md](PLAN.md): the single project goal, completed milestones, remaining work, and portfolio scope.
-- [Experimental Python package tooling and configuration](backend/README.md): install, lock, test, build, and passive API/worker settings loaders; Go remains the running reference.
+- [Experimental Python package tooling and configuration](backend/README.md): install, lock, test, build, and passive API/worker settings loaders; Python timeout settings use numeric seconds, while the running Go backend retains its Go duration syntax.
 - [AGENTS.md](AGENTS.md): coding conventions, build/check commands, and internal working rules.
 - This README: current behavior, configuration, and local usage. It is not a second roadmap.
 
@@ -88,7 +88,7 @@ This is an operator command, not an agent-executed step or a claim of live-servi
 | `REDIS_DIAL_TIMEOUT` | No | `5s` | Initial Redis connection timeout |
 | `REDIS_PUBLISH_TIMEOUT` | No | `2s` | Per-publication timeout |
 
-Worker-only settings are validated by the worker loader and do not alter API startup. All durations use Go duration syntax; invalid or out-of-range values fail worker startup.
+Worker-only settings are validated by the worker loader and do not alter API startup. Go runtime settings below retain Go duration syntax. The experimental Python loaders use numeric seconds (`5`, `0.5`) instead; see [their configuration contract](backend/README.md#configuration-loaders-m03).
 
 | Variable | Default | Bounds / meaning |
 |---|---:|---|
