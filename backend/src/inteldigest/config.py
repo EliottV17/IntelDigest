@@ -6,8 +6,8 @@ import math
 import os
 import socket
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
 from urllib.parse import urlsplit
 
 from redis.connection import parse_url

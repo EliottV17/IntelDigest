@@ -6,6 +6,7 @@ backend/.venv/
 backend/.uv-cache/
 backend/dist/
 backend/.pytest_cache/
+backend/.ruff_cache/
 backend/src/inteldigest/__pycache__/
 backend/tests/__pycache__/
 
