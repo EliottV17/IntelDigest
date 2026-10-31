@@ -178,3 +178,11 @@ Los tres comandos son checks contra la base Go, informados por el padre, no ejec
 ## Diferencias aceptadas
 
 **Cantidad: 0.** (Sin entradas.) Ninguna discrepancia contractual de C1–C10 recibe aprobación en M01; cualquier decisión futura se registra fuera de este baseline y con autorización explícita.
+
+## Desviación aprobada para configuración Python (M03)
+
+Esta excepción se limita a los loaders experimentales `load_api` y `load_worker`; no modifica el comportamiento ni la evidencia histórica del backend Go descritos arriba.
+
+- Los timeouts Python se configuran como números de segundos (`5`, `0.5`) y se exponen como valores `float` en campos `_seconds`. No se reproduce la sintaxis Go, la precisión de nanosegundos ni sus límites `int64`.
+- La conversión numérica y el análisis de URL Redis usan las bibliotecas Python/dependencias acordadas. Aceptación de formatos y mensajes de error pueden diferir de Go; no se promete igualdad de parser ni de errores. Los errores de URL se acotan sin incluir credenciales.
+- Se conservan defaults efectivos, loaders pasivos, URLs requeridas, separación API/worker y límites operativos de pool, bloqueo Redis, cuerpo y redirecciones.

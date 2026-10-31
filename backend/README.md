@@ -55,29 +55,29 @@ worker = load_worker() # reads shared and worker settings; API-only settings are
 print(api.api_port, worker.pool_size)
 ```
 
-All duration results are integer nanoseconds in fields ending in `_ns`, exactly preserving Go `time.Duration` precision. Accepted Go duration units are `ns`, `us`, `µs`, `μs`, `ms`, `s`, `m`, and `h`; compound and fractional values and an optional leading sign follow Go parsing. Configured durations must be positive except `WORKER_STREAM_BLOCK`, which must be at least `1ms`; values must fit signed 64-bit nanoseconds. `queue_read_timeout_ns` is block plus operation timeout and rejects signed-int64 overflow.
+Duration fields end in `_seconds` and contain Python `float` seconds. Environment values are numeric seconds such as `5` or `0.5`; unit strings such as `500ms` are not accepted. Timeouts must be finite and positive, except `WORKER_STREAM_BLOCK`, which must be at least `0.001` seconds so Redis blocking remains finite. `queue_read_timeout_seconds` is the block plus operation timeout. Numeric conversion follows Python's native `float()` behavior rather than Go duration syntax.
 
 | Variable | Used by | Default | Validation / meaning |
 |---|---|---:|---|
 | `DATABASE_URL` | API, worker | Required | Nonempty string; retained verbatim. |
 | `REDIS_URL` | API, worker | Required | `redis://` or `rediss://` URL with host; path is empty, `/`, or a non-negative integer database. Credentials are never included in validation errors. |
 | `REDIS_STREAM` | API, worker | `inteldigest:jobs` | Empty or unset uses default; nonempty value retained verbatim. |
-| `REDIS_DIAL_TIMEOUT` | API, worker | `5s` | Positive Go duration. |
+| `REDIS_DIAL_TIMEOUT` | API, worker | `5` | Finite positive number of seconds (for example `0.5`). |
 | `API_PORT` | API only | `8080` | Empty or unset uses default; otherwise retained verbatim. |
-| `REDIS_PUBLISH_TIMEOUT` | API only | `2s` | Positive Go duration. Worker ignores it. |
+| `REDIS_PUBLISH_TIMEOUT` | API only | `2` | Finite positive number of seconds. Worker ignores it. |
 | `WORKER_POOL_SIZE` | Worker only | `4` | Integer `1`–`64`. |
 | `WORKER_CONSUMER_GROUP` | Worker only | `inteldigest:workers` | If set, must be nonblank; surrounding whitespace is trimmed. |
 | `WORKER_CONSUMER_NAME` | Worker only | Hostname plus UUID | If set, must be nonblank; surrounding whitespace is trimmed. Unset names are generated uniquely per loader call. |
-| `WORKER_STREAM_BLOCK` | Worker only | `2s` | Go duration, minimum `1ms`. |
-| `WORKER_QUEUE_OPERATION_TIMEOUT` | Worker only | `5s` | Positive Go duration; sum with block timeout must fit signed int64. |
-| `WORKER_DB_TIMEOUT` | Worker only | `5s` | Positive Go duration. |
-| `WORKER_SHUTDOWN_TIMEOUT` | Worker only | `10s` | Positive Go duration; not a hard process-exit deadline. |
-| `SCRAPER_CONNECT_TIMEOUT` | Worker only | `5s` | Positive Go duration. |
-| `SCRAPER_TLS_TIMEOUT` | Worker only | `5s` | Positive Go duration. |
-| `SCRAPER_HEADER_TIMEOUT` | Worker only | `10s` | Positive Go duration. |
-| `SCRAPER_READ_TIMEOUT` | Worker only | `10s` | Positive Go duration. |
-| `SCRAPER_REQUEST_TIMEOUT` | Worker only | `30s` | Positive Go duration; one global deadline, not summed across redirect stages. |
-| `SCRAPER_MAX_BODY_BYTES` | Worker only | `5242880` | Positive signed 64-bit integer; must allow `max + 1` read and integer conversion. |
+| `WORKER_STREAM_BLOCK` | Worker only | `2` | Numeric seconds, minimum `0.001` to prevent infinite Redis blocking. |
+| `WORKER_QUEUE_OPERATION_TIMEOUT` | Worker only | `5` | Finite positive number of seconds. |
+| `WORKER_DB_TIMEOUT` | Worker only | `5` | Finite positive number of seconds. |
+| `WORKER_SHUTDOWN_TIMEOUT` | Worker only | `10` | Finite positive seconds; not a hard process-exit deadline. |
+| `SCRAPER_CONNECT_TIMEOUT` | Worker only | `5` | Finite positive number of seconds. |
+| `SCRAPER_TLS_TIMEOUT` | Worker only | `5` | Finite positive number of seconds. |
+| `SCRAPER_HEADER_TIMEOUT` | Worker only | `10` | Finite positive number of seconds. |
+| `SCRAPER_READ_TIMEOUT` | Worker only | `10` | Finite positive number of seconds. |
+| `SCRAPER_REQUEST_TIMEOUT` | Worker only | `30` | Finite positive seconds; one global deadline, not summed across redirect stages. |
+| `SCRAPER_MAX_BODY_BYTES` | Worker only | `5242880` | Positive integer; the read limit is one byte higher. |
 | `SCRAPER_MAX_REDIRECTS` | Worker only | `5` | Integer `0`–`10`; zero disables redirects. |
 
 API loading intentionally ignores malformed worker-only settings. Worker loading ignores `API_PORT` and `REDIS_PUBLISH_TIMEOUT`, and does not require them.
