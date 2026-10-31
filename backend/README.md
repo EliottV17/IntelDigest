@@ -41,8 +41,49 @@ UV_CACHE_DIR="$PWD/.uv-cache" UV_PYTHON_DOWNLOADS=never UV_NO_ENV_FILE=1 uv lock
 
 Build-isolation boundary: the first `uv sync --frozen` builds the editable project in isolation and may resolve `build-system.requires` separately; those isolated build dependencies are not locked by `uv.lock`. The documented `uv build --no-build-isolation` instead uses Hatchling from the synchronized, locked development group. Offline reconstruction was independently verified using an existing artifact cache, not a cache-empty machine. These checks establish package installation and artifact usability, not byte-for-byte reproducible builds.
 
+## Configuration loaders (M03)
+
+`inteldigest.config` provides passive, separate `load_api(env=None)` and `load_worker(env=None)` functions. Pass an explicit mapping for deterministic tests; omitted `env` reads `os.environ`. They only validate settings: they do not load dotenv, resolve DNS, connect to PostgreSQL/Redis, log values, or start processes. The Go backend remains operational; these Python loaders are not wired to an API or worker.
+
+Quick use (no services are contacted):
+
+```python
+from inteldigest.config import load_api, load_worker
+
+api = load_api()       # reads API/shared settings from the process environment
+worker = load_worker() # reads shared and worker settings; API-only settings are ignored
+print(api.api_port, worker.pool_size)
+```
+
+All duration results are integer nanoseconds in fields ending in `_ns`, exactly preserving Go `time.Duration` precision. Accepted Go duration units are `ns`, `us`, `µs`, `μs`, `ms`, `s`, `m`, and `h`; compound and fractional values and an optional leading sign follow Go parsing. Configured durations must be positive except `WORKER_STREAM_BLOCK`, which must be at least `1ms`; values must fit signed 64-bit nanoseconds. `queue_read_timeout_ns` is block plus operation timeout and rejects signed-int64 overflow.
+
+| Variable | Used by | Default | Validation / meaning |
+|---|---|---:|---|
+| `DATABASE_URL` | API, worker | Required | Nonempty string; retained verbatim. |
+| `REDIS_URL` | API, worker | Required | `redis://` or `rediss://` URL with host; path is empty, `/`, or a non-negative integer database. Credentials are never included in validation errors. |
+| `REDIS_STREAM` | API, worker | `inteldigest:jobs` | Empty or unset uses default; nonempty value retained verbatim. |
+| `REDIS_DIAL_TIMEOUT` | API, worker | `5s` | Positive Go duration. |
+| `API_PORT` | API only | `8080` | Empty or unset uses default; otherwise retained verbatim. |
+| `REDIS_PUBLISH_TIMEOUT` | API only | `2s` | Positive Go duration. Worker ignores it. |
+| `WORKER_POOL_SIZE` | Worker only | `4` | Integer `1`–`64`. |
+| `WORKER_CONSUMER_GROUP` | Worker only | `inteldigest:workers` | If set, must be nonblank; surrounding whitespace is trimmed. |
+| `WORKER_CONSUMER_NAME` | Worker only | Hostname plus UUID | If set, must be nonblank; surrounding whitespace is trimmed. Unset names are generated uniquely per loader call. |
+| `WORKER_STREAM_BLOCK` | Worker only | `2s` | Go duration, minimum `1ms`. |
+| `WORKER_QUEUE_OPERATION_TIMEOUT` | Worker only | `5s` | Positive Go duration; sum with block timeout must fit signed int64. |
+| `WORKER_DB_TIMEOUT` | Worker only | `5s` | Positive Go duration. |
+| `WORKER_SHUTDOWN_TIMEOUT` | Worker only | `10s` | Positive Go duration; not a hard process-exit deadline. |
+| `SCRAPER_CONNECT_TIMEOUT` | Worker only | `5s` | Positive Go duration. |
+| `SCRAPER_TLS_TIMEOUT` | Worker only | `5s` | Positive Go duration. |
+| `SCRAPER_HEADER_TIMEOUT` | Worker only | `10s` | Positive Go duration. |
+| `SCRAPER_READ_TIMEOUT` | Worker only | `10s` | Positive Go duration. |
+| `SCRAPER_REQUEST_TIMEOUT` | Worker only | `30s` | Positive Go duration; one global deadline, not summed across redirect stages. |
+| `SCRAPER_MAX_BODY_BYTES` | Worker only | `5242880` | Positive signed 64-bit integer; must allow `max + 1` read and integer conversion. |
+| `SCRAPER_MAX_REDIRECTS` | Worker only | `5` | Integer `0`–`10`; zero disables redirects. |
+
+API loading intentionally ignores malformed worker-only settings. Worker loading ignores `API_PORT` and `REDIS_PUBLISH_TIMEOUT`, and does not require them.
+
 ## Package status and boundary
 
-The package uses `src/` layout and has an inert `inteldigest` package initializer. Its smoke test checks installed metadata and imports the selected runtime dependencies; it does not implement future behavior. There are no application entry points, settings loaders, API routes, worker loops, or service connections yet. Do not use Uvicorn startup commands: no ASGI application exists.
+The package uses `src/` layout and has an inert `inteldigest` package initializer. Its smoke test checks installed metadata and imports the selected runtime dependencies; configuration is the only behavior added so far, and no API routes, worker loops, or service connections exist. Do not use Uvicorn startup commands: no ASGI application exists.
 
 Generated virtualenv, uv cache, build output, pytest cache, and Python bytecode are local artifacts and ignored by Git. The existing Go implementation and its commands remain the operational reference until a separately authorized migration task changes that status.
