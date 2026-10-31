@@ -25,10 +25,11 @@ dev = [
     "httpx>=0.28,<1",
     "pytest>=8.3,<9",
     "pytest-asyncio>=1.0,<2",
+    "ruff>=0.17.3",
 ]
 
 [tool.hatch.build]
-exclude = ["/.venv", "/.uv-cache", "/dist", "/.pytest_cache", "**/__pycache__"]
+exclude = ["/.venv", "/.uv-cache", "/dist", "/.pytest_cache", "/.ruff_cache", "**/__pycache__"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/inteldigest"]

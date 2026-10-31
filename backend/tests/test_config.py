@@ -9,7 +9,6 @@ import pytest
 
 from inteldigest.config import load_api, load_worker
 
-
 BASE = {"DATABASE_URL": "postgres://user:pass@db/app", "REDIS_URL": "redis://cache:6379/0"}
 
 
