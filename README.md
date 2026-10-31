@@ -5,7 +5,6 @@ IntelDigest accepts technical-article URLs, persists digest jobs, and publishes 
 ## Documentation
 
 - [PLAN.md](PLAN.md): the single project goal, completed milestones, remaining work, and portfolio scope.
-- [Experimental Python package tooling and configuration](backend/README.md): install, lock, test, build, and passive API/worker settings loaders; Python timeout settings use numeric seconds, while the running Go backend retains its Go duration syntax.
 - [AGENTS.md](AGENTS.md): coding conventions, build/check commands, and internal working rules.
 - This README: current behavior, configuration, and local usage. It is not a second roadmap.
 
