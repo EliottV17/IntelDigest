@@ -189,9 +189,9 @@ def test_omitted_environment_reads_process_environment_passively(monkeypatch: py
 
 
 def test_readmes_document_public_api_and_seconds_syntax() -> None:
-    readme = Path(__file__).parents[1].joinpath("README.md").read_text()
+    readme = Path(__file__).parents[2].joinpath("README.md").read_text()
     for required in ("load_api", "load_worker", "seconds", "0.5", "REDIS_PUBLISH_TIMEOUT", "SCRAPER_MAX_REDIRECTS"):
         assert required in readme
     assert "nanosecond" not in readme.lower()
-    root_readme = Path(__file__).parents[2].joinpath("README.md").read_text()
+    root_readme = Path(__file__).parents[3].joinpath("README.md").read_text()
     assert "configuration" in root_readme.lower()

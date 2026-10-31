@@ -1,6 +1,6 @@
 # IntelDigest — Migración del backend a Python / FastAPI
 
-**Estado: migración iniciada; M01–M03 están completadas según sus ledgers; M04 aún no está iniciada.** La base Python, tooling y configuración ya existen en `backend/`. Go sigue operativa y sirve como evidencia del comportamiento actual, no como especificación de detalles internos que Python deba reproducir.
+**Estado: migración iniciada; M01–M03 están completadas según sus ledgers; M04 implementada con checks unitarios y estructura de paquetes aprobada, con commit local autorizado. Integración real pendiente de autorización; M05–M06 no iniciadas.** La base Python, tooling y configuración ya existen en `backend/`. Go sigue operativa y sirve como evidencia del comportamiento actual, no como especificación de detalles internos que Python deba reproducir.
 
 **Dirección:** mantener este repositorio y su historial; desarrollar Python idiomático en `backend/`, con FastAPI y las dependencias acordadas. Conservar resultados funcionales, contratos externos y protecciones de producto, no emular mecánicamente Go ni construir capas para imitar sus parsers, tipos, errores o mecanismos.
 
@@ -55,6 +55,71 @@ La migración termina donde termina el código actual: receptor síncrono de met
 
 No ejecutar ambos workers sobre el mismo stream/grupo o base para comparar: competirían por mensajes y modificarían los mismos jobs. Las verificaciones usan estado aislado y servicios expresamente autorizados.
 
+### 3.1. Estructura de paquetes aprobada
+
+Organización objetivo de la migración; no representa archivos ya implementados. Se omiten los `__init__.py` de los paquetes salvo el inicial. Crear cada directorio y módulo solo cuando su tarea lo necesite, nunca como esqueleto vacío anticipado.
+
+```text
+backend/
+├── pyproject.toml
+├── uv.lock
+├── README.md
+├── src/
+│   └── inteldigest/
+│       ├── __init__.py
+│       ├── config.py
+│       ├── jobs/
+│       │   ├── models.py
+│       │   ├── repository.py
+│       │   └── validation.py
+│       ├── api/
+│       │   ├── app.py
+│       │   ├── dependencies.py
+│       │   ├── schemas.py
+│       │   └── routes/
+│       │       ├── health.py
+│       │       └── digests.py
+│       ├── queue/
+│       │   ├── message.py
+│       │   ├── publisher.py
+│       │   └── consumer.py
+│       ├── scraper/
+│       │   ├── models.py
+│       │   ├── policy.py
+│       │   ├── network.py
+│       │   ├── fetcher.py
+│       │   └── extraction.py
+│       └── worker/
+│           ├── __main__.py
+│           ├── processor.py
+│           ├── pool.py
+│           └── receiver.py
+└── tests/
+    ├── conftest.py
+    ├── unit/
+    │   ├── test_package.py
+    │   ├── test_config.py
+    │   ├── jobs/
+    │   ├── api/
+    │   ├── queue/
+    │   ├── scraper/
+    │   └── worker/
+    ├── integration/
+    │   ├── conftest.py
+    │   └── test_repository.py
+    └── fixtures/
+        └── scraper/
+```
+
+- `config.py` conserva configuración transversal y cargadores API/worker separados; no necesita un paquete artificial de un solo archivo.
+- `jobs/` agrupa el modelo compartido, SQL y validación inicial de URL sin DNS. `api/schemas.py` define contratos HTTP deliberados, no la forma de almacenamiento.
+- `api/` contiene FastAPI, lifespan, dependencias y rutas; no ejecuta scraping ni consume mensajes. `queue/` contiene el transporte Redis, sin decidir estados de negocio.
+- `scraper/` separa política de destinos, conexión validada, descarga y extracción. `worker/` coordina procesamiento, concurrencia, receiver y proceso independiente.
+- Tests unitarios sin servicios bajo `tests/unit/`, organizados por paquete; integración real opt-in bajo `tests/integration/`, con sus fixtures allí. `tests/conftest.py` registra la opción de conexión sin abrir servicios. Pytest usa importación `importlib` para permitir módulos homónimos en ambas suites sin alterar `sys.path`.
+- SQL sigue en `migrations/` de la raíz, sin duplicarse. No agregar capas genéricas `core/`, `utils/`, `services/` o interfaces sin una necesidad concreta.
+
+**Aplicado para M04:** `jobs/{__init__,models,repository}.py`, `tests/unit/{test_config,test_package}.py`, `tests/unit/jobs/test_repository.py`, `tests/integration/{conftest,test_repository}.py` y el registro de opción en `tests/conftest.py`. No se crean todavía `validation.py`, API, cola, scraper, worker ni fixtures de artículos. M05 amplía el repositorio existente; M06 inicia `api/`.
+
 ## 4. Punto de partida y contratos que conservar
 
 La inspección inicial encontró la rama `docs/consolidate-portfolio-plan` limpia, aproximadamente 2.712 líneas en 15 archivos Go productivos y 5.546 líneas en 16 archivos Go de tests. Estos datos son históricos: revalidarlos antes de implementar.
@@ -87,7 +152,7 @@ Los tests y el código Go son evidencia de escenarios y resultados, no una orden
 | Pruebas | pytest, pytest-asyncio y HTTPX para la API | Dobles deterministas; sin consumo de crédito |
 | Utilidades | Biblioteca estándar | `asyncio`, UUID, logging, señales, IPs y configuración simple |
 
-B0 ya está completada: Python 3.14.8, uv 0.13.1, Pydantic 2 y dependencias acordadas están instalados/bloqueados según `backend/`; Ruff 0.17.3 es lint de desarrollo, no formatter ni type checker. Los ledgers [M01–M03](odd/tasks/python-migration-m01.md) y [corrección M03](odd/tasks/python-config-simplification.md), junto con [backend/README.md](backend/README.md), registran entregas y límites. No describir M01–M03 como pendientes ni afirmar que M04+ comenzó.
+B0 ya está completada: Python 3.14.8, uv 0.13.1, Pydantic 2 y dependencias acordadas están instalados/bloqueados según `backend/`; Ruff 0.17.3 es lint de desarrollo, no formatter ni type checker. Los ledgers [M01–M03](odd/tasks/python-migration-m01.md) y [corrección M03](odd/tasks/python-config-simplification.md), junto con [backend/README.md](backend/README.md), registran entregas y límites. No describir M01–M03 como pendientes. M04 tiene implementación y tests en B1; la integración real sigue pendiente y M05+ no comenzó.
 
 Las bibliotecas no resuelven automáticamente la seguridad. El resolver/conector de aiohttp no es por sí solo defensa SSRF: verificar IPs literales, DNS mixto, caché/reutilización, redirecciones y TLS con una política segura equivalente en resultado. No sustituir la validación explícita por una propiedad simplista como `ipaddress.is_private`; mantener TLS normal, revalidar redirecciones y excluir proxies implícitos.
 
@@ -117,7 +182,7 @@ flowchart LR
 
 ## 7. Ramas, tareas y commits propuestos
 
-M01–M03 están completadas; M04–M20 siguen propuestas y pendientes, sin implicar autorización para ejecutarlas. Cada fila es una unidad propuesta, sujeta a subdivisión por presupuesto. Los cierres de rama exigen checks observados, no solo código escrito. La evidencia B0 está en los ledgers enlazados arriba.
+M01–M03 están completadas; M04 está implementada y organizada según la sección 3.1, con commit local autorizado e integración real pendiente de autorización. M05–M20 siguen propuestas y pendientes, sin implicar autorización para ejecutarlas. Cada fila es una unidad propuesta, sujeta a subdivisión por presupuesto. Los cierres de rama exigen checks observados, no solo código escrito. La evidencia B0 está en los ledgers enlazados arriba.
 
 ### B0 — `migration/python-foundation`
 
@@ -133,7 +198,7 @@ M01–M03 están completadas; M04–M20 siguen propuestas y pendientes, sin impl
 
 | Tarea | Entrega | Commit propuesto |
 |---|---|---|
-| M04 | Crear/consultar jobs con SQL existente y serialización conforme a los datos y efectos documentados; pruebas unitarias y casos de integración | `feat(db): port job creation and lookup to Python` |
+| M04 | Crear/consultar jobs con SQL existente y serialización conforme a los datos y efectos documentados; pruebas unitarias y casos de integración — implementada y organizada; commit local autorizado, integración real pendiente | `feat(db): port job creation and lookup to Python` |
 | M05 | Claim atómico y diagnóstico intermedio condicionado y acotado; pruebas del único ganador y estado conservado | `feat(db): preserve atomic claims and scrape diagnostics` |
 | M06 | FastAPI con lifespan, health y GET por ID; preservar contratos HTTP públicos, campos nulos y significado/formato documentado de UUID y timestamps, usando validación/serialización idiomáticas y adaptadores ordinarios si hacen falta; docs de arranque | `feat(api): port health and job lookup endpoints` |
 
@@ -245,4 +310,4 @@ Al retomar: leer los ledgers existentes, este documento, PLAN.md y Git; reconcil
 
 ## 11. Próxima decisión
 
-**Siguiente tarea propuesta: M04**, creación y consulta de jobs en Python usando el SQL existente. M01–M03 están completadas según sus ledgers; M04 no se declara iniciada ni autorizada por este plan. Este documento no autoriza por sí solo cambios de código u operaciones.
+**Pausa solicitada después del commit M04:** creación y consulta de jobs implementadas en `migration/python-storage-api`, desde `main` (`feec51871848afb376e51f446de90b1f344a40f8`), con estructura de paquetes y commit local aprobados por la persona. La unidad se identifica por el mensaje `feat(db): port job creation and lookup to Python`; consultar el SHA real en Git, no inferirlo del plan. Tests en `backend/tests/unit/jobs/test_repository.py` e integración opt-in en `backend/tests/integration/test_repository.py`; uso y límites en [backend/README.md](backend/README.md#job-creation-and-lookup-m04). La integración PostgreSQL real no está autorizada ni verificada. Esperar una nueva confirmación antes de M05; M06 tampoco está iniciada. Este documento no autoriza por sí solo cambios de código u operaciones.

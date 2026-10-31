@@ -1,6 +1,6 @@
 # IntelDigest Python package tooling
 
-This directory contains an **experimental, installable Python package only**. It does not run the API, worker, scraping, or database behavior; the Go backend remains the reference implementation. SQL migrations remain in the repository-root `migrations/` directory.
+This directory contains an **experimental, installable Python backend package** with passive configuration and an async job repository. It has no API, worker, or scraper entrypoint; the Go backend remains operational. SQL migrations remain in the repository-root `migrations/` directory.
 
 ## Quick path
 
@@ -96,8 +96,67 @@ Duration fields end in `_seconds` and contain Python `float` seconds. Environmen
 
 API loading intentionally ignores malformed worker-only settings. Worker loading ignores `API_PORT` and `REDIS_PUBLISH_TIMEOUT`, and does not require them.
 
+## Job creation and lookup (M04)
+
+`inteldigest.jobs.repository.Repository` borrows an asyncpg pool or connection with default codecs. It does not open/close connections or run migrations. The caller owns connection lifecycle, operation timeouts and transaction policy; cancellation and database errors propagate without retries or logging. URL validation belongs to the future submission endpoint, not the repository.
+
+- `await repository.create_job(url)` binds a fresh UUID and the URL in an `INSERT ... RETURNING`. The existing SQL defaults supply `pending`, equal creation/update timestamps, and null result/error.
+- `await repository.get_job_by_id(uuid)` returns the stored job or raises `JobNotFound("job not found")`. Other database errors are not treated as missing jobs.
+- `inteldigest.jobs.models.Job` retains UUID, timezone-aware database timestamps, status, optional error and decoded JSONB values. Pydantic's `model_dump(mode="json")` / `model_dump_json()` serialize UUIDs, timestamps and nested JSON natively, including null fields. HTTP omission rules remain M06's responsibility.
+
+Claims and scrape diagnostics (M05), HTTP routes (M06), and POST/publication are not implemented.
+
+### Repository tests
+
+With the locked virtualenv already installed, no dependency resolution or service access is needed for unit tests and lint:
+
+```sh
+cd backend
+.venv/bin/python -m pytest tests/unit/jobs/test_repository.py -q
+.venv/bin/python -m pytest -q
+.venv/bin/ruff check src tests
+```
+
+The default suite skips two PostgreSQL integration cases. They exercise creation/lookup, missing jobs, defaults, JSONB, diagnostics and timestamp round trips using the existing migration. **Running them requires separate operator authorization and an already-created, dedicated local `inteldigest_test` database.** They never create/drop a database or start services; each test rolls back its transaction, including any table creation by the migration. Do not run alongside other integration suites or on shared instances. No dotenv or environment DSN is read.
+
+After that authorization, an operator may run serially with an explicitly supplied test URL (example only):
+
+```sh
+.venv/bin/python -m pytest tests/integration/test_repository.py -q \
+  --test-database-url 'postgresql://localhost/inteldigest_test'
+```
+
+The option rejects non-local hosts, other database names, query parameters and fragments. Real PostgreSQL execution has not yet been verified for M04; fake-based unit checks do not establish driver/SQL integration.
+
+## Package layout
+
+The approved migration layout is recorded in [PLAN-MIGRATION.md](../PLAN-MIGRATION.md#31-estructura-de-paquetes-aprobada). Only the modules needed by completed/current tasks exist:
+
+```text
+src/inteldigest/
+  __init__.py
+  config.py
+  jobs/
+    __init__.py
+    models.py
+    repository.py
+tests/
+  conftest.py
+  unit/
+    test_config.py
+    test_package.py
+    jobs/test_repository.py
+  integration/
+    conftest.py
+    test_repository.py
+```
+
+`config.py` stays transversal; job models and SQL live together in `jobs/`. HTTP schemas will belong to the future `api/` package, not to the persisted job model. API, queue, scraper and worker packages are not created ahead of their tasks.
+
+Unit tests require no services. PostgreSQL fixtures live only in `tests/integration/conftest.py`; the root `conftest.py` merely registers the explicit connection option so pytest can recognize it consistently. Pytest uses `--import-mode=importlib` to collect identically named unit/integration test modules without package-name collisions or modifying `sys.path`.
+
 ## Package status and boundary
 
-The package uses `src/` layout and has an inert `inteldigest` package initializer. Its smoke test checks installed metadata and imports the selected runtime dependencies; configuration is the only behavior added so far, and no API routes, worker loops, or service connections exist. Do not use Uvicorn startup commands: no ASGI application exists.
+The package uses `src/` layout and has an inert `inteldigest` package initializer. Its smoke test checks installed metadata and imports the selected runtime dependencies. Configuration and repository methods are available but not wired to processes. Do not use Uvicorn startup commands: no ASGI application exists.
 
 Generated virtualenv, uv cache, build output, pytest cache, and Python bytecode are local artifacts and ignored by Git. The existing Go implementation and its commands remain the operational reference until a separately authorized migration task changes that status.
