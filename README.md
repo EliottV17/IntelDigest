@@ -5,6 +5,7 @@ IntelDigest accepts technical-article URLs, persists digest jobs, and publishes 
 ## Documentation
 
 - [PLAN.md](PLAN.md): the single project goal, completed milestones, remaining work, and portfolio scope.
+- [Experimental Python package tooling](backend/README.md): install, lock, test, and build commands for the package foundation only; Go remains the running reference.
 - [AGENTS.md](AGENTS.md): coding conventions, build/check commands, and internal working rules.
 - This README: current behavior, configuration, and local usage. It is not a second roadmap.
 
