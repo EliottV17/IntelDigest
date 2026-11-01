@@ -1,6 +1,6 @@
 # IntelDigest — Migración del backend a Python / FastAPI
 
-**Estado: migración iniciada; M01–M03 están completadas según sus ledgers; M04 implementada con checks unitarios y estructura de paquetes aprobada, con commit local autorizado. Integración real pendiente de autorización; M05–M06 no iniciadas.** La base Python, tooling y configuración ya existen en `backend/`. Go sigue operativa y sirve como evidencia del comportamiento actual, no como especificación de detalles internos que Python deba reproducir.
+**Estado: M01–M05 implementadas; M04 en `5f069ef` con revisión nativa reconocida. M05 verificada independientemente y con 12 casos de integración PostgreSQL real aprobados; commit local autorizado. M06 no iniciada: Python todavía no ofrece API HTTP ni worker ejecutable.** La base Python, tooling y configuración ya existen en `backend/`. Go sigue operativa y sirve como evidencia del comportamiento actual, no como especificación de detalles internos que Python deba reproducir.
 
 **Dirección:** mantener este repositorio y su historial; desarrollar Python idiomático en `backend/`, con FastAPI y las dependencias acordadas. Conservar resultados funcionales, contratos externos y protecciones de producto, no emular mecánicamente Go ni construir capas para imitar sus parsers, tipos, errores o mecanismos.
 
@@ -152,7 +152,7 @@ Los tests y el código Go son evidencia de escenarios y resultados, no una orden
 | Pruebas | pytest, pytest-asyncio y HTTPX para la API | Dobles deterministas; sin consumo de crédito |
 | Utilidades | Biblioteca estándar | `asyncio`, UUID, logging, señales, IPs y configuración simple |
 
-B0 ya está completada: Python 3.14.8, uv 0.13.1, Pydantic 2 y dependencias acordadas están instalados/bloqueados según `backend/`; Ruff 0.17.3 es lint de desarrollo, no formatter ni type checker. Los ledgers [M01–M03](odd/tasks/python-migration-m01.md) y [corrección M03](odd/tasks/python-config-simplification.md), junto con [backend/README.md](backend/README.md), registran entregas y límites. No describir M01–M03 como pendientes. M04 tiene implementación y tests en B1; la integración real sigue pendiente y M05+ no comenzó.
+B0 ya está completada: Python 3.14.8, uv 0.13.1, Pydantic 2 y dependencias acordadas están instalados/bloqueados según `backend/`; Ruff 0.17.3 es lint de desarrollo, no formatter ni type checker. Los ledgers [M01–M03](odd/tasks/python-migration-m01.md) y [corrección M03](odd/tasks/python-config-simplification.md), junto con [backend/README.md](backend/README.md), registran entregas y límites. No describir M01–M04 como pendientes de implementación. M04/M05 tienen código y tests en B1, con 12 casos de integración PostgreSQL real ejecutados correctamente; M06+ no comenzó.
 
 Las bibliotecas no resuelven automáticamente la seguridad. El resolver/conector de aiohttp no es por sí solo defensa SSRF: verificar IPs literales, DNS mixto, caché/reutilización, redirecciones y TLS con una política segura equivalente en resultado. No sustituir la validación explícita por una propiedad simplista como `ipaddress.is_private`; mantener TLS normal, revalidar redirecciones y excluir proxies implícitos.
 
@@ -182,7 +182,7 @@ flowchart LR
 
 ## 7. Ramas, tareas y commits propuestos
 
-M01–M03 están completadas; M04 está implementada y organizada según la sección 3.1, con commit local autorizado e integración real pendiente de autorización. M05–M20 siguen propuestas y pendientes, sin implicar autorización para ejecutarlas. Cada fila es una unidad propuesta, sujeta a subdivisión por presupuesto. Los cierres de rama exigen checks observados, no solo código escrito. La evidencia B0 está en los ledgers enlazados arriba.
+M01–M04 están implementadas; M04 está organizada según la sección 3.1 y entregada en `5f069ef`, con revisión nativa reconocida. M05 tiene implementación, tests unitarios, verificación independiente sin blockers e integración PostgreSQL real (12/12), con commit local autorizado. M06–M20 siguen propuestas y pendientes, sin implicar autorización para ejecutarlas. Cada fila es una unidad propuesta, sujeta a subdivisión por presupuesto. Los cierres de rama exigen checks observados, no solo código escrito. La evidencia B0 está en los ledgers enlazados arriba.
 
 ### B0 — `migration/python-foundation`
 
@@ -198,8 +198,8 @@ M01–M03 están completadas; M04 está implementada y organizada según la secc
 
 | Tarea | Entrega | Commit propuesto |
 |---|---|---|
-| M04 | Crear/consultar jobs con SQL existente y serialización conforme a los datos y efectos documentados; pruebas unitarias y casos de integración — implementada y organizada; commit local autorizado, integración real pendiente | `feat(db): port job creation and lookup to Python` |
-| M05 | Claim atómico y diagnóstico intermedio condicionado y acotado; pruebas del único ganador y estado conservado | `feat(db): preserve atomic claims and scrape diagnostics` |
+| M04 | Crear/consultar jobs con SQL existente y serialización conforme a los datos y efectos documentados; pruebas unitarias y casos de integración — implementada y organizada en `5f069ef`; integración PostgreSQL verificada en el cierre M05 | `feat(db): port job creation and lookup to Python` |
+| M05 | Claim atómico y diagnóstico intermedio condicionado y acotado; pruebas del único ganador y estado conservado — implementada y verificada independientemente; integración PostgreSQL real 12/12, commit local autorizado | `feat(db): preserve atomic claims and scrape diagnostics` |
 | M06 | FastAPI con lifespan, health y GET por ID; preservar contratos HTTP públicos, campos nulos y significado/formato documentado de UUID y timestamps, usando validación/serialización idiomáticas y adaptadores ordinarios si hacen falta; docs de arranque | `feat(api): port health and job lookup endpoints` |
 
 **Cierre:** lectura HTTP y repositorio verificables; integración real solo con autorización. POST aún no se anuncia disponible en Python. Riesgo: preservar contratos de producto y atomicidad del claim, sin replicar representaciones internas.
@@ -310,4 +310,4 @@ Al retomar: leer los ledgers existentes, este documento, PLAN.md y Git; reconcil
 
 ## 11. Próxima decisión
 
-**Pausa solicitada después del commit M04:** creación y consulta de jobs implementadas en `migration/python-storage-api`, desde `main` (`feec51871848afb376e51f446de90b1f344a40f8`), con estructura de paquetes y commit local aprobados por la persona. La unidad se identifica por el mensaje `feat(db): port job creation and lookup to Python`; consultar el SHA real en Git, no inferirlo del plan. Tests en `backend/tests/unit/jobs/test_repository.py` e integración opt-in en `backend/tests/integration/test_repository.py`; uso y límites en [backend/README.md](backend/README.md#job-creation-and-lookup-m04). La integración PostgreSQL real no está autorizada ni verificada. Esperar una nueva confirmación antes de M05; M06 tampoco está iniciada. Este documento no autoriza por sí solo cambios de código u operaciones.
+**M05 verificada; pausa antes de M06:** implementación en `migration/python-storage-api`, desde M04 `5f069ef5b19539125c881a465d8114e18f8a2ed9`, límite anterior revisado. Seguimiento y evidencia: [ledger M05](odd/tasks/python-migration-m05.md). `jobs/repository.py` permite creación/consulta, claim atómico y diagnóstico de hasta 1024 caracteres condicionado a `processing`; no hay estados terminales nuevos ni ACK. Verificación independiente PASS S1–S3, sin blockers, más **12/12 casos PostgreSQL reales**, incluido un único ganador entre dos conexiones y limpieza del estado de prueba. La persona autorizó arrancar solo PostgreSQL sin dotenv, crear `inteldigest_test` si faltaba y el commit local M05; la unidad se identifica por `feat(db): preserve atomic claims and scrape diagnostics` y su SHA real en Git. No se borraron bases/volúmenes ni se inició Redis; PostgreSQL queda disponible. Python todavía no expone HTTP ni procesa artículos. El próximo paso propuesto es M06 (FastAPI, lifespan, health y GET), únicamente tras confirmación; POST, Redis, scraper y worker corresponden a tareas posteriores. Este documento no autoriza por sí solo nuevas operaciones, push o PR.

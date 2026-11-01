@@ -104,7 +104,18 @@ API loading intentionally ignores malformed worker-only settings. Worker loading
 - `await repository.get_job_by_id(uuid)` returns the stored job or raises `JobNotFound("job not found")`. Other database errors are not treated as missing jobs.
 - `inteldigest.jobs.models.Job` retains UUID, timezone-aware database timestamps, status, optional error and decoded JSONB values. Pydantic's `model_dump(mode="json")` / `model_dump_json()` serialize UUIDs, timestamps and nested JSON natively, including null fields. HTTP omission rules remain M06's responsibility.
 
-Claims and scrape diagnostics (M05), HTTP routes (M06), and POST/publication are not implemented.
+## Atomic claims and scrape diagnostics (M05)
+
+The same repository also exposes two conditional writes:
+
+- `await repository.try_mark_processing(uuid)` performs one atomic `UPDATE ... WHERE status = 'pending' RETURNING id`, setting `processing`, clearing any previous error and updating `updated_at`. Concurrent callers can have only one winner. It returns `True` for the winner and `False` for missing/already-claimed/terminal jobs.
+- `await repository.record_scrape_error(uuid, safe_reason)` updates only `error` and `updated_at` on a job still in `processing`. It retains at most 1024 Unicode code points (not bytes or grapheme clusters) using ordinary Python slicing, including empty diagnostics. It returns `False` for missing jobs or any other state, without modifying them.
+
+With PostgreSQL's default `READ COMMITTED` isolation, a competing claim rechecks `pending` after the winner commits and returns `False`. Stronger isolation levels can instead raise a serialization error; that error propagates without retries. If the caller supplies a transaction, successful updates are provisional until it commits.
+
+Both methods preserve `result`, URL, ID and creation time. Diagnostics do not mark jobs `failed` or `completed`, publish messages or ACK Redis entries. Database errors and cancellation propagate; there are no implicit retries. The caller must provide an already-safe reason: bounding a string is not redaction of secrets or article content.
+
+HTTP routes (M06) and POST/publication are not implemented.
 
 ### Repository tests
 
@@ -117,7 +128,7 @@ cd backend
 .venv/bin/ruff check src tests
 ```
 
-The default suite skips two PostgreSQL integration cases. They exercise creation/lookup, missing jobs, defaults, JSONB, diagnostics and timestamp round trips using the existing migration. **Running them requires separate operator authorization and an already-created, dedicated local `inteldigest_test` database.** They never create/drop a database or start services; each test rolls back its transaction, including any table creation by the migration. Do not run alongside other integration suites or on shared instances. No dotenv or environment DSN is read.
+The default suite skips twelve PostgreSQL integration cases. They exercise creation/lookup, missing jobs, defaults, JSONB/timestamps, conditional writes in all four states, and a two-connection claim with exactly one winner. **Running them requires separate operator authorization and an already-created, dedicated local `inteldigest_test` database.** They never create/drop a database or start services. Most tests roll back their transactions, including any table creation by the existing migration. The contention test creates a uniquely named `m05_<uuid>` schema, applies that same migration inside it, and uses a two-connection pool; cleanup drops only its owned schema and test data. An interrupted process can leave that schema for manual cleanup. Do not run alongside other integration suites or on shared instances. No dotenv or environment DSN is read.
 
 After that authorization, an operator may run serially with an explicitly supplied test URL (example only):
 
@@ -126,7 +137,9 @@ After that authorization, an operator may run serially with an explicitly suppli
   --test-database-url 'postgresql://localhost/inteldigest_test'
 ```
 
-The option rejects non-local hosts, other database names, query parameters and fragments. Real PostgreSQL execution has not yet been verified for M04; fake-based unit checks do not establish driver/SQL integration.
+The option rejects non-local hosts, other database names, query parameters and fragments. The authorized M04/M05 integration run against the repository's local PostgreSQL 17 passed **all 12 cases**, including two real competing connections with exactly one claim winner. Schema names, public table names and job count matched their pre-test baseline afterward. This verifies the repository boundary only: it does not exercise an HTTP endpoint, Redis, the worker or scraping. The default suite still skips these cases unless the explicit test URL is provided; the observed run is not a guarantee that services are always available.
+
+For that run, PostgreSQL alone was started with Compose using `COMPOSE_DISABLE_ENV_FILE=1`, `COMPOSE_ENV_FILES` removed and the explicit repository Compose file. The dedicated `inteldigest_test` database was created only because it was absent. No application database/volume was deleted, and the service/test database were left running/available. Startup and database creation remain operator-authorized steps, not implicit test behavior. Evidence: [M05 ledger](../odd/tasks/python-migration-m05.md#l9--observed-live-postgresql-integration).
 
 ## Package layout
 

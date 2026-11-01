@@ -88,7 +88,7 @@ async def test_lookup_null_fields_and_missing_job_are_distinct():
     assert len(db.calls) == 1
 
 
-@pytest.mark.parametrize("operation", ["create", "lookup"])
+@pytest.mark.parametrize("operation", ["create", "lookup", "claim", "diagnostic"])
 async def test_database_failure_is_not_converted_to_missing_or_success(operation, capsys):
     error = RuntimeError("database unavailable")
     db = FakeDatabase(error=error)
@@ -96,14 +96,18 @@ async def test_database_failure_is_not_converted_to_missing_or_success(operation
     with pytest.raises(RuntimeError) as caught:
         if operation == "create":
             await repo.create_job(URL)
-        else:
+        elif operation == "lookup":
             await repo.get_job_by_id(uuid4())
+        elif operation == "claim":
+            await repo.try_mark_processing(uuid4())
+        else:
+            await repo.record_scrape_error(uuid4(), "safe reason")
     assert caught.value is error
     assert len(db.calls) == 1
     assert capsys.readouterr() == ("", "")
 
 
-@pytest.mark.parametrize("operation", ["create", "lookup"])
+@pytest.mark.parametrize("operation", ["create", "lookup", "claim", "diagnostic"])
 async def test_cancellation_reaches_database_without_retry(operation):
     started = asyncio.Event()
     canceled = asyncio.Event()
@@ -117,11 +121,43 @@ async def test_cancellation_reaches_database_without_retry(operation):
                 canceled.set()
 
     repo = Repository(BlockingDatabase())
-    task = asyncio.create_task(
-        repo.create_job(URL) if operation == "create" else repo.get_job_by_id(uuid4())
-    )
+    if operation == "create":
+        call = repo.create_job(URL)
+    elif operation == "lookup":
+        call = repo.get_job_by_id(uuid4())
+    elif operation == "claim":
+        call = repo.try_mark_processing(uuid4())
+    else:
+        call = repo.record_scrape_error(uuid4(), "safe reason")
+    task = asyncio.create_task(call)
     await asyncio.wait_for(started.wait(), timeout=1)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
     assert canceled.is_set()
+
+
+@pytest.mark.parametrize("changed", [True, False])
+async def test_claim_is_one_conditional_parameterized_update(changed):
+    job_id = uuid4()
+    db = FakeDatabase({"id": job_id} if changed else None)
+    assert await Repository(db).try_mark_processing(job_id) is changed
+    assert db.calls == [(
+        ("UPDATE jobs SET status = 'processing', error = NULL, updated_at = NOW() "
+         "WHERE id = $1 AND status = 'pending' RETURNING id"),
+        (job_id,),
+    )]
+
+
+@pytest.mark.parametrize("changed", [True, False])
+@pytest.mark.parametrize("reason", ["", "a" * 1024, "b" * 1025, "界" * 1024, "🙂" * 1025],
+                         ids=["empty", "ascii-limit", "ascii-over", "unicode-limit", "unicode-over"])
+async def test_diagnostic_is_bounded_by_characters_and_processing_only(changed, reason):
+    job_id = uuid4()
+    db = FakeDatabase({"id": job_id} if changed else None)
+    assert await Repository(db).record_scrape_error(job_id, reason) is changed
+    assert db.calls == [(
+        ("UPDATE jobs SET error = $2, updated_at = NOW() "
+         "WHERE id = $1 AND status = 'processing' RETURNING id"),
+        (job_id, reason[:1024]),
+    )]

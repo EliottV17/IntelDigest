@@ -45,6 +45,24 @@ class Repository:
             raise RuntimeError("job insert returned no row")
         return _job_from_row(row)
 
+    async def try_mark_processing(self, job_id: UUID) -> bool:
+        """Atomically claim a pending job and clear its previous diagnostic."""
+        row = await self._db.fetchrow(
+            "UPDATE jobs SET status = 'processing', error = NULL, updated_at = NOW() "
+            "WHERE id = $1 AND status = 'pending' RETURNING id",
+            job_id,
+        )
+        return row is not None
+
+    async def record_scrape_error(self, job_id: UUID, safe_reason: str) -> bool:
+        """Store an already-safe diagnostic, capped at 1024 Unicode characters."""
+        row = await self._db.fetchrow(
+            "UPDATE jobs SET error = $2, updated_at = NOW() "
+            "WHERE id = $1 AND status = 'processing' RETURNING id",
+            job_id, safe_reason[:1024],
+        )
+        return row is not None
+
     async def get_job_by_id(self, job_id: UUID) -> Job:
         row = await self._db.fetchrow(
             f"SELECT {_COLUMNS} FROM jobs WHERE id = $1", job_id,

@@ -6,7 +6,11 @@ IntelDigest accepts technical-article URLs, persists digest jobs, and publishes 
 
 - [PLAN.md](PLAN.md): the single project goal, completed milestones, remaining work, and portfolio scope.
 - [AGENTS.md](AGENTS.md): coding conventions, build/check commands, and internal working rules.
+- [PLAN-MIGRATION.md](PLAN-MIGRATION.md): temporary Python migration procedure and progress; it does not replace the product plan.
+- [backend/README.md](backend/README.md): experimental Python tooling, configuration and job repository.
 - This README: current behavior, configuration, and local usage. It is not a second roadmap.
+
+**Python migration status (M01–M05):** package tooling, separate API/worker configuration loaders and PostgreSQL job creation, lookup, atomic claims and bounded diagnostics are implemented. Twelve repository integration cases passed against real local PostgreSQL. Python does not yet expose HTTP endpoints, publish/consume Redis jobs, scrape articles or run a worker. The runnable backend described below is still Go; migration is not a second complete backend yet.
 
 ## Architecture and current status
 
