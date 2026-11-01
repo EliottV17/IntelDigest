@@ -2,6 +2,7 @@
 
 import asyncio
 import math
+from collections.abc import Awaitable
 from contextlib import suppress
 from typing import Any, Protocol, Self
 from urllib.parse import urlsplit
@@ -15,9 +16,9 @@ from inteldigest.queue.message import Message
 class RedisStreamClient(Protocol):
     """Minimal async Redis surface needed to verify connectivity and append stream entries."""
 
-    async def ping(self) -> Any: ...
-    async def xadd(self, name: str, fields: dict[Any, Any]) -> Any: ...
-    async def aclose(self) -> Any: ...
+    def ping(self) -> Awaitable[Any]: ...
+    def xadd(self, name: str, fields: dict[Any, Any]) -> Awaitable[Any]: ...
+    def aclose(self) -> Awaitable[Any]: ...
 
 
 class QueueError(RuntimeError):
