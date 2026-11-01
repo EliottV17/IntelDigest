@@ -1,6 +1,6 @@
 # IntelDigest Python package tooling
 
-This directory contains an **experimental, installable Python backend package** with configuration, an async job repository and a read-only FastAPI application. POST, Redis transport, worker and scraper are not implemented in Python; the Go backend remains operational. SQL migrations remain in the repository-root `migrations/` directory.
+This directory contains an **experimental, installable Python backend package** with configuration, an async job repository, a read-only FastAPI application, and the Redis Stream v1 job publication contract. FastAPI POST submission, Redis stream consumption, worker and scraper are not implemented in Python yet; the Go backend remains operational. SQL migrations remain in the repository-root `migrations/` directory.
 
 ## Quick path
 
@@ -151,7 +151,7 @@ env -u UVICORN_ENV_FILE .venv/bin/python -m uvicorn inteldigest.api.app:create_a
   --factory --host 0.0.0.0 --port "${API_PORT:-8080}"
 ```
 
-This is a manual service command, not a compilation check. No dotenv file is loaded; do not add `--env-file`. The port is passed explicitly from `API_PORT` (default `8080`). The existing API loader still requires `DATABASE_URL` and a valid `REDIS_URL`, but M06 does not connect to Redis. Redis connectivity/publication belongs to B2. Malformed worker-only options do not affect API loading.
+This is a manual service command, not a compilation check. No dotenv file is loaded; do not add `--env-file`. The port is passed explicitly from `API_PORT` (default `8080`). The existing API loader still requires `DATABASE_URL` and a valid `REDIS_URL`, and the HTTP lifespan still remains read-only until M08 wires `POST /api/v1/digests` to the Redis publisher below. Malformed worker-only options do not affect API loading.
 
 The factory is passive. Lifespan validates API configuration, opens one asyncpg pool (minimum 1, maximum 10 connections, 5-second connection timeout, 10-second query timeout) and makes the existing repository available to requests. Startup failure prevents serving. Shutdown closes the pool with a 10-second close budget; asyncpg terminates connections if that close is cancelled. No migration or data write happens at startup.
 
@@ -174,6 +174,16 @@ curl -s 'http://localhost:8080/api/v1/digests/<uuid>'
 
 M06 tests use TestClient's lifespan and a deterministic pool double, including the real repository's row conversion. They prove HTTP behavior and resource ownership without services; they are not a live HTTP + PostgreSQL run. Run `.venv/bin/python -m pytest tests/unit/api/test_app.py -q`. The installed Starlette emits an HTTPX deprecation warning; tests still pass and no unapproved dependency change is made.
 
+## Redis job publication (M07)
+
+`inteldigest.queue` implements the versioned Redis Stream publication contract used by the API pipeline, without altering stream fields or adding consumer/worker logic yet:
+
+- `inteldigest.queue.message.Message` (`SCHEMA_VERSION = 1`) is an immutable Pydantic model carrying `schema_version`, `job_id` and `url`. `model_dump_json()` serializes compact JSON `{"schema_version":1,"job_id":"<uuid>","url":"<url>"}`. Validation requires strict integer `schema_version == 1`, a non-nil UUID, and a syntactically valid absolute `http`/`https` URL with a host and no whitespace/control characters; it performs no DNS lookup.
+- `await Publisher.connect(redis_url, stream, dial_timeout_seconds, publish_timeout_seconds)` validates the Redis URL (`redis://` or `rediss://` with host and optional non-negative DB index, without exposing credentials in errors), stream name, and finite positive timeouts before creating an async `redis.asyncio` client with `socket_connect_timeout=dial_timeout_seconds` and verifying connectivity via `PING` within `dial_timeout_seconds`. If `PING` fails, times out or is cancelled, the created client is closed before raising `PublisherConnectionError` (or propagating cancellation).
+- `await publisher.publish(message)` validates the `Message` before calling Redis, then appends `{"data": payload_json}` via `XADD` to the configured stream under `publish_timeout_seconds`. Transport errors and timeouts raise `PublishError` naming the stream and preserving `__cause__`; external task cancellation propagates. `await publisher.aclose()` closes the underlying Redis client.
+
+M07 is covered by deterministic unit tests (`.venv/bin/python -m pytest tests/unit/queue -q`) without starting or connecting to a live Redis instance. Wiring `Publisher` into FastAPI lifespan and `POST /api/v1/digests` belongs to M08; consumer groups, `XREADGROUP` and `XACK` belong to M09.
+
 ## Package layout
 
 The approved migration layout is recorded in [PLAN-MIGRATION.md](../PLAN-MIGRATION.md#31-estructura-de-paquetes-aprobada). Only the modules needed by completed/current tasks exist:
@@ -192,6 +202,10 @@ src/inteldigest/
     __init__.py
     models.py
     repository.py
+  queue/
+    __init__.py
+    message.py
+    publisher.py
 tests/
   conftest.py
   unit/
@@ -199,17 +213,18 @@ tests/
     test_package.py
     jobs/test_repository.py
     api/test_app.py
+    queue/{test_message,test_publisher}.py
   integration/
     conftest.py
     test_repository.py
 ```
 
-`config.py` stays transversal; job models and SQL live together in `jobs/`. HTTP schemas live in `api/`, separate from the persisted job model. Queue, scraper and worker packages are not created ahead of their tasks.
+`config.py` stays transversal; job models and SQL live together in `jobs/`. HTTP schemas live in `api/`, separate from the persisted job model. `queue/` currently holds only the M07 message/publisher modules; consumer, scraper and worker modules are not created ahead of their tasks.
 
 Unit tests require no services. PostgreSQL fixtures live only in `tests/integration/conftest.py`; the root `conftest.py` merely registers the explicit connection option so pytest can recognize it consistently. Pytest uses `--import-mode=importlib` to collect identically named unit/integration test modules without package-name collisions or modifying `sys.path`.
 
 ## Package status and boundary
 
-The package uses `src/` layout and has an inert `inteldigest` package initializer. Its smoke test checks installed metadata and imports the selected runtime dependencies. The read-only API is wired to configuration and repository through its lifespan. It does not create jobs, publish/consume messages or process articles.
+The package uses `src/` layout and has an inert `inteldigest` package initializer. Its smoke test checks installed metadata and imports the selected runtime dependencies. The read-only API is wired to configuration and repository through its lifespan; `inteldigest.queue` provides standalone v1 message serialization and `XADD` publication, not yet connected to an HTTP `POST` route, stream consumer or worker.
 
 Generated virtualenv, uv cache, build output, pytest cache, and Python bytecode are local artifacts and ignored by Git. The existing Go implementation and its commands remain the operational reference until a separately authorized migration task changes that status.

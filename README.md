@@ -10,7 +10,7 @@ IntelDigest accepts technical-article URLs, persists digest jobs, and publishes 
 - [backend/README.md](backend/README.md): experimental Python tooling, configuration and job repository.
 - This README: current behavior, configuration, and local usage. It is not a second roadmap.
 
-**Python migration status (M01–M06 / B1):** tooling, separate API/worker configuration loaders, PostgreSQL job storage/claims/diagnostics and a read-only FastAPI application (`/healthz`, `GET /api/v1/digests/{id}`) are implemented. M06's in-process HTTP tests pass; twelve repository integration cases passed against real PostgreSQL during M05, not a live HTTP + database run in M06. See [Python startup and HTTP contracts](backend/README.md#read-only-http-api-m06). Python cannot yet accept POST submissions, publish/consume Redis jobs, scrape articles or run a worker. The complete runnable pipeline below is still Go.
+**Python migration status (M01–M07 / B2 in progress):** tooling, separate API/worker configuration loaders, PostgreSQL job storage/claims/diagnostics, a read-only FastAPI application (`/healthz`, `GET /api/v1/digests/{id}`), and the standalone Redis Stream v1 message/publisher module (`inteldigest.queue`) are implemented. Unit and in-process HTTP tests pass without live services; twelve repository integration cases passed against real PostgreSQL during M05, while M07's Redis publisher is verified with deterministic unit doubles only. See [Python startup, HTTP and queue contracts](backend/README.md#read-only-http-api-m06). FastAPI POST submission, Redis consumption, scraping and the worker are not implemented in Python yet; the complete runnable pipeline below is still Go.
 
 ## Architecture and current status
 

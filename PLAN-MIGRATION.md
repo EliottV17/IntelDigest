@@ -1,6 +1,6 @@
 # IntelDigest — Migración del backend a Python / FastAPI
 
-**Estado: M01–M06 implementadas; B1 completa en código y checks disponibles. M04 en `5f069ef` y M05 en `3399287`; M06 añade FastAPI de lectura con lifespan, health y GET por ID, incluida en la unidad de cierre `feat(api): port health and job lookup endpoints`. HTTP verificado en proceso con pool falso; los 12 casos PostgreSQL reales son evidencia del cierre M05, no de HTTP + PostgreSQL en M06. Python todavía no ofrece POST, transporte Redis ni worker ejecutable.** La base Python, tooling y configuración ya existen en `backend/`. Go sigue operativa y sirve como evidencia del comportamiento actual, no como especificación de detalles internos que Python deba reproducir.
+**Estado: M01–M07 implementadas; B1 fusionada en `main` (`5153c6c`) y B2 iniciada en `migration/python-redis-api` con M07 (`inteldigest.queue.{message,publisher}`: mensaje v1 en `data`, `XADD`, validación sin DNS, `PING`/timeouts y cierre de cliente). M07 verificada con dobles deterministas sin Redis vivo. Python todavía no expone `POST /api/v1/digests` (M08), consumo Redis (M09), scraper ni worker ejecutable.** La base Python, tooling y configuración ya existen en `backend/`. Go sigue operativa y sirve como evidencia del comportamiento actual, no como especificación de detalles internos que Python deba reproducir.
 
 **Dirección:** mantener este repositorio y su historial; desarrollar Python idiomático en `backend/`, con FastAPI y las dependencias acordadas. Conservar resultados funcionales, contratos externos y protecciones de producto, no emular mecánicamente Go ni construir capas para imitar sus parsers, tipos, errores o mecanismos.
 
@@ -118,7 +118,7 @@ backend/
 - Tests unitarios sin servicios bajo `tests/unit/`, organizados por paquete; integración real opt-in bajo `tests/integration/`, con sus fixtures allí. `tests/conftest.py` registra la opción de conexión sin abrir servicios. Pytest usa importación `importlib` para permitir módulos homónimos en ambas suites sin alterar `sys.path`.
 - SQL sigue en `migrations/` de la raíz, sin duplicarse. No agregar capas genéricas `core/`, `utils/`, `services/` o interfaces sin una necesidad concreta.
 
-**Aplicado para M04:** `jobs/{__init__,models,repository}.py`, `tests/unit/{test_config,test_package}.py`, `tests/unit/jobs/test_repository.py`, `tests/integration/{conftest,test_repository}.py` y el registro de opción en `tests/conftest.py`. M05 amplía el repositorio existente; M06 incorpora `api/{app,dependencies,schemas}.py`, `api/routes/{health,digests}.py` y `tests/unit/api/test_app.py`. No se crean todavía `validation.py`, cola, scraper, worker ni fixtures de artículos.
+**Aplicado hasta M07:** `jobs/{__init__,models,repository}.py`, `api/{app,dependencies,schemas}.py`, `api/routes/{health,digests}.py`, `queue/{__init__,message,publisher}.py` y sus tests unitarios bajo `tests/unit/{jobs,api,queue}/`, además de `tests/integration/{conftest,test_repository}.py` y `tests/conftest.py`. No se crean todavía `jobs/validation.py`, `queue/consumer.py`, scraper, worker ni fixtures de artículos.
 
 ## 4. Punto de partida y contratos que conservar
 
@@ -152,7 +152,7 @@ Los tests y el código Go son evidencia de escenarios y resultados, no una orden
 | Pruebas | pytest, pytest-asyncio y HTTPX para la API | Dobles deterministas; sin consumo de crédito |
 | Utilidades | Biblioteca estándar | `asyncio`, UUID, logging, señales, IPs y configuración simple |
 
-B0 ya está completada: Python 3.14.8, uv 0.13.1, Pydantic 2 y dependencias acordadas están instalados/bloqueados según `backend/`; Ruff 0.17.3 es lint de desarrollo, no formatter ni type checker. Los ledgers [M01–M03](odd/tasks/python-migration-m01.md) y [corrección M03](odd/tasks/python-config-simplification.md), junto con [backend/README.md](backend/README.md), registran entregas y límites. No describir M01–M06 como pendientes de implementación. B1 tiene código y tests de repositorio/lectura HTTP; M04/M05 cuentan con 12 casos PostgreSQL reales y M06 con tests HTTP deterministas sin servicios. M07+ no comenzó.
+B0 ya está completada: Python 3.14.8, uv 0.13.1, Pydantic 2 y dependencias acordadas están instalados/bloqueados según `backend/`; Ruff 0.17.3 es lint de desarrollo, no formatter ni type checker. Los ledgers [M01–M03](odd/tasks/python-migration-m01.md) y [corrección M03](odd/tasks/python-config-simplification.md), junto con [backend/README.md](backend/README.md), registran entregas y límites. No describir M01–M07 como pendientes de implementación. B1 (`5153c6c`) entregó repositorio y lectura HTTP; M04/M05 cuentan con 12 casos PostgreSQL reales y M06 con tests HTTP deterministas. En B2, M07 aporta mensaje v1 y publicación Redis verificada con tests unitarios deterministas; M08+ sigue pendiente.
 
 Las bibliotecas no resuelven automáticamente la seguridad. El resolver/conector de aiohttp no es por sí solo defensa SSRF: verificar IPs literales, DNS mixto, caché/reutilización, redirecciones y TLS con una política segura equivalente en resultado. No sustituir la validación explícita por una propiedad simplista como `ipaddress.is_private`; mantener TLS normal, revalidar redirecciones y excluir proxies implícitos.
 
@@ -182,7 +182,7 @@ flowchart LR
 
 ## 7. Ramas, tareas y commits propuestos
 
-M01–M06 están implementadas; M04 está entregada en `5f069ef` y M05 en `3399287`. M05 cuenta con verificación independiente e integración PostgreSQL real (12/12). M06 tiene lectura HTTP y lifespan verificados con dobles en proceso, incluidos en su unidad de cierre. M07–M20 siguen propuestas y pendientes, sin implicar autorización para ejecutarlas. Cada fila es una unidad propuesta, sujeta a subdivisión por presupuesto. Los cierres de rama exigen checks observados, no solo código escrito. La evidencia B0 está en los ledgers enlazados arriba.
+M01–M07 están implementadas: B1 quedó integrada en `main` (`5f069ef`, `3399287`, `fe04c03`, merge `5153c6c`) y M07 abre B2 en `migration/python-redis-api` con el contrato v1 y `Publisher` verificados con dobles deterministas. M08–M20 siguen propuestas y pendientes, sin implicar autorización automática para ejecutarlas. Cada fila es una unidad propuesta, sujeta a subdivisión por presupuesto. Los cierres de rama exigen checks observados, no solo código escrito. La evidencia B0 está en los ledgers enlazados arriba.
 
 ### B0 — `migration/python-foundation`
 
@@ -208,7 +208,7 @@ M01–M06 están implementadas; M04 está entregada en `5f069ef` y M05 en `33992
 
 | Tarea | Entrega | Commit propuesto |
 |---|---|---|
-| M07 | Mensaje v1 y publicación `XADD`, configuración y timeout; tests del JSON dentro de `data` | `feat(queue): preserve Redis job publication protocol` |
+| M07 | Mensaje v1 y publicación `XADD`, configuración y timeout; tests del JSON dentro de `data` — implementada en `migration/python-redis-api` con dobles deterministas (sin Redis vivo) | `feat(queue): preserve Redis job publication protocol` |
 | M08 | POST completo: validación, persistencia y publicación; `202`, errores y `503` con registro conservado | `feat(api): preserve digest submission semantics` |
 | M09 | Grupo idempotente, lectura nueva acotada, `NOGROUP` y ACK sin borrar entradas; tests y docs | `feat(queue): port bounded stream consumption` |
 
@@ -310,4 +310,4 @@ Al retomar: leer los ledgers existentes, este documento, PLAN.md y Git; reconcil
 
 ## 11. Próxima decisión
 
-**M06 completada; cierre B1.** La unidad `feat(api): port health and job lookup endpoints` parte de M05 `339928734944a80a89b4ca1c1d268aa1a1075ccd` en `migration/python-storage-api`; no incluye el diff acumulado M04/M05. El SHA de entrega se consulta en Git para no introducir una referencia al propio commit. Se verificó RED por módulo ausente y GREEN de los 38 casos HTTP/lifespan, suite 137 passed / 12 skipped y Ruff limpio. Starlette emite una advertencia de deprecación HTTPX; no se cambian dependencias para ocultarla. Durante la implementación no se ejecutó integración real ni se operaron servicios o leyeron dotenv. Posteriormente, por autorización humana, se inició solo PostgreSQL sin dotenv y se comprobó en lectura la tabla `jobs` y un job existente; eso no prueba HTTP + PostgreSQL. La persona autorizó el commit M06 y el push de B1; no autorizó PR, merge ni comenzar B2. El próximo paso de desarrollo, tras autorización, es B2 (M07–M09: Redis y POST).
+**M07 completada en `migration/python-redis-api` (desde `main` `5153c6ceb90a739313b2a9ee029299b6073b8303`).** La unidad `feat(queue): preserve Redis job publication protocol` incorpora `inteldigest.queue.message` y `inteldigest.queue.publisher` junto con 47 casos unitarios (`tests/unit/queue/`), suite Python completa 184 passed / 12 skipped y Ruff limpio, sin tocar código Go, migraciones, dependencias ni archivos dotenv, y sin arrancar ni conectar con un Redis real. El SHA exacto de entrega se consulta en Git para no autorreferenciar el commit. El próximo paso dentro de B2, pendiente de confirmación explícita de la persona, es **M08** (`POST /api/v1/digests`: validación inicial sin DNS, persistencia antes de publicar, `202`, errores `400`/`500` y `503` con `job_id` conservado).
