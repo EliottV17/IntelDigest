@@ -6,11 +6,15 @@ IntelDigest accepts technical-article URLs, persists digest jobs, and publishes 
 
 - [PLAN.md](PLAN.md): the single project goal, completed milestones, remaining work, and portfolio scope.
 - [AGENTS.md](AGENTS.md): coding conventions, build/check commands, and internal working rules.
+- [PLAN-MIGRATION.md](PLAN-MIGRATION.md): temporary Python migration procedure and progress; it does not replace the product plan.
+- [backend/README.md](backend/README.md): experimental Python tooling, configuration and job repository.
 - This README: current behavior, configuration, and local usage. It is not a second roadmap.
+
+**Python migration status (M01–M06 / B1):** tooling, separate API/worker configuration loaders, PostgreSQL job storage/claims/diagnostics and a read-only FastAPI application (`/healthz`, `GET /api/v1/digests/{id}`) are implemented. M06's in-process HTTP tests pass; twelve repository integration cases passed against real PostgreSQL during M05, not a live HTTP + database run in M06. See [Python startup and HTTP contracts](backend/README.md#read-only-http-api-m06). Python cannot yet accept POST submissions, publish/consume Redis jobs, scrape articles or run a worker. The complete runnable pipeline below is still Go.
 
 ## Architecture and current status
 
-This flowchart describes the implemented pipeline only. The planned Next.js frontend, AI processing, and deployment are tracked in [PLAN.md](PLAN.md).
+This flowchart describes the implemented Go pipeline. The experimental read-only Python API is documented separately above. The planned Next.js frontend, AI processing, and deployment are tracked in [PLAN.md](PLAN.md).
 
 ```mermaid
 flowchart LR
