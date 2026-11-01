@@ -1,1 +1,1 @@
-"""Redis Streams message contract and job publication."""
+"""Redis Streams message contract, job publication, and bounded stream consumption."""

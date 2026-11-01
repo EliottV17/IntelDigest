@@ -1,6 +1,6 @@
 # IntelDigest Python package tooling
 
-This directory contains an **experimental, installable Python backend package** with configuration, an async job repository, initial non-DNS URL validation, a FastAPI application with health, job lookup and submission endpoints, and the Redis Stream v1 job publication contract. Redis stream consumption, worker and scraper are not implemented in Python yet; the Go backend remains operational. SQL migrations remain in the repository-root `migrations/` directory.
+This directory contains an **experimental, installable Python backend package** with configuration, an async job repository, initial non-DNS URL validation, a FastAPI application with health, job lookup and submission endpoints, the Redis Stream v1 job publication contract, and bounded Redis Stream consumption. Worker execution and scraper are not implemented in Python yet; the Go backend remains operational. SQL migrations remain in the repository-root `migrations/` directory.
 
 ## Quick path
 
@@ -193,7 +193,27 @@ M06 and M08 tests use TestClient's lifespan and deterministic database pool and 
 - `await Publisher.connect(redis_url, stream, dial_timeout_seconds, publish_timeout_seconds)` validates the Redis URL (`redis://` or `rediss://` with host and optional non-negative DB index, without exposing credentials in errors), stream name, and finite positive timeouts before creating an async `redis.asyncio` client with `socket_connect_timeout=dial_timeout_seconds` and verifying connectivity via `PING` within `dial_timeout_seconds`. If `PING` fails, times out or is cancelled, the created client is closed before raising `PublisherConnectionError` (or propagating cancellation).
 - `await publisher.publish(message)` validates the `Message` before calling Redis, then appends `{"data": payload_json}` via `XADD` to the configured stream under `publish_timeout_seconds`. Transport errors and timeouts raise `PublishError` naming the stream and preserving `__cause__`; external task cancellation propagates. `await publisher.aclose()` closes the underlying Redis client.
 
-M07 is covered by deterministic unit tests (`.venv/bin/python -m pytest tests/unit/queue -q`) without starting or connecting to a live Redis instance. `Publisher` is wired into FastAPI lifespan and `POST /api/v1/digests` in M08; consumer groups, `XREADGROUP` and `XACK` belong to M09.
+M07 is covered by deterministic unit tests (`.venv/bin/python -m pytest tests/unit/queue -q`) without starting or connecting to a live Redis instance. `Publisher` is wired into FastAPI lifespan and `POST /api/v1/digests` in M08.
+
+## Bounded Redis Stream consumption (M09)
+
+`inteldigest.queue.consumer` implements the consumer-side Redis Stream transport contract (`Consumer`, `Delivery`, and `ConsumerGroupMissingError`), without business state decisions or worker execution:
+
+- `Delivery` (`entry_id: str`, `fields: Mapping[str, Any]`) is an immutable dataclass retaining the original stream entry identity and uninterpreted field mapping. `Consumer.read` is strictly transport-only: it does **not** decode or validate JSON payloads; payload decoding and job processing belong to the worker processor in M14.
+- Normalization: `Consumer.read` decodes wire `bytes` entry IDs and field keys to UTF-8 strings. Field values in `bytes` are decoded using UTF-8 with replacement (`errors="replace"`), ensuring undecodable bytes never crash the reader while guaranteeing invalid payloads fail later JSON validation in the processor. Values already received as `str` or test-double primitives are preserved.
+- `await Consumer.connect(redis_url, stream, group, consumer_name, dial_timeout_seconds=5.0, stream_block_seconds=2.0, operation_timeout_seconds=5.0)` validates configuration before connecting:
+  - `redis_url`: `redis://` or `rediss://` with host and optional non-negative integer DB path; invalid URLs raise `ValueError("queue: invalid Redis URL")` with both `__cause__` and `__context__` set to `None` so credentials never leak.
+  - `stream`: required nonempty string.
+  - `group` and `consumer_name`: required nonblank strings with surrounding whitespace trimmed.
+  - `stream_block_seconds`: finite float `>= 0.001` (at least 1ms); converted to integer milliseconds (`block_ms >= 1`) to prevent Redis `BLOCK 0` (which blocks indefinitely).
+  - `dial_timeout_seconds` and `operation_timeout_seconds`: finite positive floats.
+  - Verifies connectivity via `PING` within `dial_timeout_seconds`. If `PING` fails, times out, or is cancelled, the client is closed before raising `ConsumerConnectionError` (or re-raising `CancelledError`).
+- `await consumer.ensure_group()` creates the group with `XGROUP CREATE stream group 0 MKSTREAM` under `operation_timeout_seconds`. Idempotency rule: only a Redis `ResponseError` starting with exact `"BUSYGROUP"` is treated as an already-existing group and returns cleanly (`None`). Any other error or driver timeout wraps into `QueueError` naming stream and group with `from exc`.
+- `await consumer.read() -> Delivery | None` calls `XREADGROUP groupname consumername streams={stream: ">"} count=1 block=block_ms noack=False` under `stream_block_seconds + operation_timeout_seconds`. Normal empty block expirations (`[]`, `None`, or empty entry lists) return `None`. If Redis responds with `NOGROUP`, it raises `ConsumerGroupMissingError` (subclass of `QueueError`) naming stream and group with `from exc`, detectable via `is_group_missing(err)` or `isinstance`. Other driver errors or read timeouts wrap into `QueueError`. External `asyncio.CancelledError` propagates unmasked.
+- `await consumer.ack(entry_id: str)` validates a nonblank string entry ID before calling Redis, then invokes `XACK stream group entry_id` under `operation_timeout_seconds`. It **never deletes stream entries** (`XDEL` and `DELETE` are never called). Errors wrap into `QueueError` naming stream, group, and entry ID; `CancelledError` propagates.
+- `await consumer.aclose()` releases the owned Redis client and is idempotent.
+
+Branch B2 (`migration/python-redis-api`) completes the Redis publication and consumption contracts (M07–M09) and the FastAPI submission endpoint (M08) with deterministic unit/HTTP doubles. Running live Redis or PostgreSQL+HTTP instances remains unexecuted. Scraper B3 and worker B4 remain pending in Python.
 
 ## Package layout
 
@@ -218,6 +238,7 @@ src/inteldigest/
     __init__.py
     message.py
     publisher.py
+    consumer.py
 tests/
   conftest.py
   unit/
@@ -225,18 +246,18 @@ tests/
     test_package.py
     jobs/{test_repository,test_validation}.py
     api/test_app.py
-    queue/{test_message,test_publisher}.py
+    queue/{test_message,test_publisher,test_consumer}.py
   integration/
     conftest.py
     test_repository.py
 ```
 
-`config.py` stays transversal; job models, SQL and URL validation live together in `jobs/`. HTTP schemas live in `api/`, separate from the persisted job model. `queue/` currently holds the M07 message/publisher modules; consumer, scraper and worker modules are not created ahead of their tasks.
+`config.py` stays transversal; job models, SQL and URL validation live together in `jobs/`. HTTP schemas live in `api/`, separate from the persisted job model. `queue/` holds the M07 message/publisher modules and M09 consumer module; scraper and worker modules are not created ahead of their tasks.
 
 Unit tests require no services. PostgreSQL fixtures live only in `tests/integration/conftest.py`; the root `conftest.py` merely registers the explicit connection option so pytest can recognize it consistently. Pytest uses `--import-mode=importlib` to collect identically named unit/integration test modules without package-name collisions or modifying `sys.path`.
 
 ## Package status and boundary
 
-The package uses `src/` layout and has an inert `inteldigest` package initializer. Its smoke test checks installed metadata and imports the selected runtime dependencies. The HTTP API is wired to configuration, database repository and Redis publisher through its lifespan; `inteldigest.queue` provides v1 message serialization and `XADD` publication, not yet connected to a stream consumer or worker.
+The package uses `src/` layout and has an inert `inteldigest` package initializer. Its smoke test checks installed metadata and imports the selected runtime dependencies. The HTTP API is wired to configuration, database repository and Redis publisher through its lifespan; `inteldigest.queue` provides v1 message serialization, `XADD` publication, and bounded stream consumption, not yet wired to a standalone worker process or scraper.
 
 Generated virtualenv, uv cache, build output, pytest cache, and Python bytecode are local artifacts and ignored by Git. The existing Go implementation and its commands remain the operational reference until a separately authorized migration task changes that status.
