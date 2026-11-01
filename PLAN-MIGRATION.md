@@ -1,6 +1,6 @@
 # IntelDigest — Migración del backend a Python / FastAPI
 
-**Estado: M01–M07 implementadas; B1 fusionada en `main` (`5153c6c`) y B2 iniciada en `migration/python-redis-api` con M07 (`inteldigest.queue.{message,publisher}`: mensaje v1 en `data`, `XADD`, validación sin DNS, `PING`/timeouts y cierre de cliente). M07 verificada con dobles deterministas sin Redis vivo. Python todavía no expone `POST /api/v1/digests` (M08), consumo Redis (M09), scraper ni worker ejecutable.** La base Python, tooling y configuración ya existen en `backend/`. Go sigue operativa y sirve como evidencia del comportamiento actual, no como especificación de detalles internos que Python deba reproducir.
+**Estado: M01–M08 implementadas; B1 fusionada en `main` (`5153c6c`) y B2 en curso en `migration/python-redis-api` con M07 (`inteldigest.queue.{message,publisher}`) y M08 (`POST /api/v1/digests`: validación sin DNS en `jobs/validation.py`, persistencia antes de publicar en `jobs/repository.py`, publicación Redis `XADD` con ownership en lifespan, `202`, `400`, `500` y `503` con registro conservado). M08 verificada con dobles deterministas sin Redis ni PostgreSQL vivos. Python todavía no expone consumo Redis (M09), scraper ni worker ejecutable.** La base Python, tooling y configuración ya existen en `backend/`. Go sigue operativa y sirve como evidencia del comportamiento actual, no como especificación de detalles internos que Python deba reproducir.
 
 **Dirección:** mantener este repositorio y su historial; desarrollar Python idiomático en `backend/`, con FastAPI y las dependencias acordadas. Conservar resultados funcionales, contratos externos y protecciones de producto, no emular mecánicamente Go ni construir capas para imitar sus parsers, tipos, errores o mecanismos.
 
@@ -118,7 +118,7 @@ backend/
 - Tests unitarios sin servicios bajo `tests/unit/`, organizados por paquete; integración real opt-in bajo `tests/integration/`, con sus fixtures allí. `tests/conftest.py` registra la opción de conexión sin abrir servicios. Pytest usa importación `importlib` para permitir módulos homónimos en ambas suites sin alterar `sys.path`.
 - SQL sigue en `migrations/` de la raíz, sin duplicarse. No agregar capas genéricas `core/`, `utils/`, `services/` o interfaces sin una necesidad concreta.
 
-**Aplicado hasta M07:** `jobs/{__init__,models,repository}.py`, `api/{app,dependencies,schemas}.py`, `api/routes/{health,digests}.py`, `queue/{__init__,message,publisher}.py` y sus tests unitarios bajo `tests/unit/{jobs,api,queue}/`, además de `tests/integration/{conftest,test_repository}.py` y `tests/conftest.py`. No se crean todavía `jobs/validation.py`, `queue/consumer.py`, scraper, worker ni fixtures de artículos.
+**Aplicado hasta M08:** `jobs/{__init__,models,repository,validation}.py`, `api/{app,dependencies,schemas}.py`, `api/routes/{health,digests}.py`, `queue/{__init__,message,publisher}.py` y sus tests unitarios bajo `tests/unit/{jobs,api,queue}/`, además de `tests/integration/{conftest,test_repository}.py` y `tests/conftest.py`. No se crean todavía `queue/consumer.py`, scraper, worker ni fixtures de artículos.
 
 ## 4. Punto de partida y contratos que conservar
 
@@ -209,7 +209,7 @@ M01–M07 están implementadas: B1 quedó integrada en `main` (`5f069ef`, `33992
 | Tarea | Entrega | Commit propuesto |
 |---|---|---|
 | M07 | Mensaje v1 y publicación `XADD`, configuración y timeout; tests del JSON dentro de `data` — implementada en `migration/python-redis-api` con dobles deterministas (sin Redis vivo) | `feat(queue): preserve Redis job publication protocol` |
-| M08 | POST completo: validación, persistencia y publicación; `202`, errores y `503` con registro conservado | `feat(api): preserve digest submission semantics` |
+| M08 | POST completo: validación, persistencia y publicación; `202`, errores y `503` con registro conservado — implementada en `migration/python-redis-api` con dobles deterministas (sin Redis ni PostgreSQL vivos) | `feat(api): preserve digest submission semantics` |
 | M09 | Grupo idempotente, lectura nueva acotada, `NOGROUP` y ACK sin borrar entradas; tests y docs | `feat(queue): port bounded stream consumption` |
 
 **Cierre:** API Python y transporte completos frente a los escenarios aplicables; no se activa un worker real. Mantener validación inicial sin resolver DNS. Riesgo: contratos y comportamiento ante fallos.
@@ -310,4 +310,4 @@ Al retomar: leer los ledgers existentes, este documento, PLAN.md y Git; reconcil
 
 ## 11. Próxima decisión
 
-**M07 completada en `migration/python-redis-api` (desde `main` `5153c6ceb90a739313b2a9ee029299b6073b8303`).** La unidad `feat(queue): preserve Redis job publication protocol` incorpora `inteldigest.queue.message` y `inteldigest.queue.publisher` junto con 47 casos unitarios (`tests/unit/queue/`), suite Python completa 184 passed / 12 skipped y Ruff limpio, sin tocar código Go, migraciones, dependencias ni archivos dotenv, y sin arrancar ni conectar con un Redis real. El SHA exacto de entrega se consulta en Git para no autorreferenciar el commit. El próximo paso dentro de B2, pendiente de confirmación explícita de la persona, es **M08** (`POST /api/v1/digests`: validación inicial sin DNS, persistencia antes de publicar, `202`, errores `400`/`500` y `503` con `job_id` conservado).
+**M08 completada en `migration/python-redis-api`.** La unidad `feat(api): preserve digest submission semantics` incorpora `inteldigest.jobs.validation`, `POST /api/v1/digests` en `inteldigest.api.routes.digests`, ownership de `Publisher` en el lifespan ASGI, y tests unitarios de validación y API (271 passed / 12 skipped en la suite Python, Ruff y Pyright limpios, y prueba diferencial 100% coincidente frente al commit base), sin tocar código Go, migraciones, dependencias ni archivos dotenv, y sin arrancar servicios vivos. El SHA exacto de entrega se consulta en Git para no autorreferenciar el commit. El próximo paso dentro de B2, pendiente de confirmación explícita de la persona, es **M09** (`queue/consumer.py`: grupo idempotente, lectura nueva acotada con `XREADGROUP`, `NOGROUP` y `XACK` sin borrar entradas).
