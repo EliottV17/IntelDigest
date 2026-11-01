@@ -10,11 +10,11 @@ IntelDigest accepts technical-article URLs, persists digest jobs, and publishes 
 - [backend/README.md](backend/README.md): experimental Python tooling, configuration and job repository.
 - This README: current behavior, configuration, and local usage. It is not a second roadmap.
 
-**Python migration status (M01–M06 / B1):** tooling, separate API/worker configuration loaders, PostgreSQL job storage/claims/diagnostics and a read-only FastAPI application (`/healthz`, `GET /api/v1/digests/{id}`) are implemented. M06's in-process HTTP tests pass; twelve repository integration cases passed against real PostgreSQL during M05, not a live HTTP + database run in M06. See [Python startup and HTTP contracts](backend/README.md#read-only-http-api-m06). Python cannot yet accept POST submissions, publish/consume Redis jobs, scrape articles or run a worker. The complete runnable pipeline below is still Go.
+**Python migration status (M01–M09 / B2 complete):** tooling, separate API/worker configuration loaders, PostgreSQL job storage/claims/diagnostics, a FastAPI application (`/healthz`, `GET /api/v1/digests/{id}`, and `POST /api/v1/digests` with Redis `XADD` publication), and the standalone Redis Stream v1 message, publisher, and bounded consumer modules (`inteldigest.queue`) are implemented. Branch B2 completes API and Redis transport contracts in code and deterministic unit/in-process checks; twelve repository integration cases passed against real PostgreSQL during M05, while M07–M09 Redis publication and consumption contracts are verified with deterministic unit doubles without live Redis. See [Python startup, HTTP and queue contracts](backend/README.md#http-api-m06-m08). Scraper B3 and worker B4 remain pending in Python; the complete runnable pipeline below is still Go.
 
 ## Architecture and current status
 
-This flowchart describes the implemented Go pipeline. The experimental read-only Python API is documented separately above. The planned Next.js frontend, AI processing, and deployment are tracked in [PLAN.md](PLAN.md).
+This flowchart describes the implemented Go pipeline. The experimental Python API is documented separately above. The planned Next.js frontend, AI processing, and deployment are tracked in [PLAN.md](PLAN.md).
 
 ```mermaid
 flowchart LR

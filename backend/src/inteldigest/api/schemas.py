@@ -16,3 +16,8 @@ class JobResponse(BaseModel):
     error: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class CreateJobResponse(BaseModel):
+    job_id: UUID
+    message: str

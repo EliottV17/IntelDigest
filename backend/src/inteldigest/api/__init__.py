@@ -1,1 +1,1 @@
-"""Read-only HTTP API; submission and queue wiring belong to B2."""
+"""HTTP API with health, digest lookup, and submission endpoints."""
