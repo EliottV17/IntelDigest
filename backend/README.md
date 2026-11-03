@@ -1,6 +1,6 @@
 # IntelDigest Python package tooling
 
-This directory contains an **experimental, installable Python backend package** with configuration, an async job repository, initial non-DNS URL validation, a FastAPI application with health, job lookup and submission endpoints, the Redis Stream v1 job publication contract, bounded Redis Stream consumption, and the scraper destination validation policy and error models. Scraper network transport/fetching/extraction (M11–M13) and worker execution (B4) are not implemented in Python yet; the Go backend remains operational. SQL migrations remain in the repository-root `migrations/` directory.
+This directory contains an **experimental, installable Python backend package** with configuration, an async job repository, initial non-DNS URL validation, a FastAPI application with health, job lookup and submission endpoints, the Redis Stream v1 job publication contract, bounded Redis Stream consumption, and the scraper destination validation policy, error models, and safe coupled network transport (M10–M11). Bounded HTTP fetching/redirects (M12), Readability extraction (M13), and worker execution (B4) are not implemented in Python yet; the Go backend remains operational. SQL migrations remain in the repository-root `migrations/` directory.
 
 ## Quick path
 
@@ -225,7 +225,19 @@ Branch B2 (`migration/python-redis-api`) completes the Redis publication and con
 - `is_legacy_ipv4_form(name)`, `valid_dns_name(host)`, `is_metadata_hostname(host)`, `valid_dial_port(port)`, and `valid_dial_host(host)` reject 1-to-4 component decimal/octal/hex numeric IPv4 grammars (`127.1`, `0177.0.0.1`, `0x7f000001`, `127.0x0.0.1`) and cloud/local metadata hostnames (`localhost`, `metadata`, `metadata.google.internal`, `metadata.google`, `instance-data`, `instance-data.ec2.internal`, `metadata.tencentyun.com`, `metadata.azure.com`, `metadata.aws.internal`, and subdomains) while allowing ordinary DNS labels containing `"0x"` (`0x.org`, `0xdeadbeef.example.com`).
 - `validate_url_policy(raw_url)` enforces absolute `http`/`https` syntax, standard ports (`80` for `http`, `443` for `https`, rejecting leading zeros, empty ports, or cross-scheme ports), no credentials/userinfo, no percent-encoded or scoped hosts, and public IP literal or valid non-metadata DNS hostnames without performing DNS resolution or mutating the URL. Violations raise `ScrapeError(ScrapeErrorKind.SECURITY_REJECTED, ScrapeStage.VALIDATION)` with `SecurityRejectedError` as `__cause__`.
 
-M10 is covered by deterministic unit tests (`.venv/bin/python -m pytest tests/unit/scraper -q`). Scraper network dialing (M11), bounded HTTP fetching/redirects (M12), Readability extraction (M13), and worker execution (B4) remain pending.
+M10 is covered by deterministic unit tests (`.venv/bin/python -m pytest tests/unit/scraper/test_policy.py tests/unit/scraper/test_models.py -q`).
+
+## Scraper network transport and connection pinning (M11)
+
+`inteldigest.scraper.network` implements the safe network transport layer with coupled DNS resolution and public IP connection pinning:
+
+- `SafeDialer` and `dial_public_address`: validate port (`80` or `443`), host, and metadata names before any resolution or dial. Share one connect timeout budget (`connect_timeout_seconds`, default 5.0s) across DNS resolution and TCP dial. IP literals are verified against public address policy and dialed directly without invoking DNS; hostnames are resolved fresh per connection without caching. Empty or mixed DNS answers (any non-public IP) cause immediate rejection (`ScrapeError(SECURITY_REJECTED, FETCH)`). Dial targets are pinned to the approved public IP literal while preserving the original hostname for TLS SNI and HTTP Host.
+- `create_tls_context(*, cafile=None, capath=None, cadata=None)`: creates an `ssl.SSLContext` enforcing minimum TLS 1.2, `CERT_REQUIRED`, and strict hostname verification (`check_hostname=True`), supporting custom test root certificates.
+- `SafeTCPConnector` (subclassing `aiohttp.TCPConnector`) and `create_safe_connector`: enforces fresh coupled resolution, public IP pinning, `force_close=True` (keep-alive disabled), `use_dns_cache=False` (DNS cache disabled), and prohibits HTTP proxies (`proxy` parameters are rejected with `SECURITY_REJECTED`).
+- `create_safe_client_session`: creates an `aiohttp.ClientSession` using `SafeTCPConnector`, `aiohttp.DummyCookieJar()` (no persistent cookies), and `trust_env=False` (ignoring proxy environment variables).
+- `classify_network_error(exc)`: classifies underlying exceptions into `ScrapeError(kind, FETCH)` (`TIMEOUT`, `CANCELED`, or `NETWORK`) while preserving the underlying exception in `cause`/`__cause__` and emitting safe non-leaking string messages (`"scrape network during fetch"`).
+
+M11 is covered by deterministic unit tests (`.venv/bin/python -m pytest tests/unit/scraper/test_network.py -q`). Bounded HTTP fetching/redirects (M12), Readability extraction (M13), and worker execution (B4) remain pending.
 
 ## Package layout
 
@@ -255,6 +267,7 @@ src/inteldigest/
     __init__.py
     models.py
     policy.py
+    network.py
 tests/
   conftest.py
   unit/
@@ -263,13 +276,13 @@ tests/
     jobs/{test_repository,test_validation}.py
     api/test_app.py
     queue/{test_message,test_publisher,test_consumer}.py
-    scraper/{test_models,test_policy}.py
+    scraper/{test_models,test_policy,test_network}.py
   integration/
     conftest.py
     test_repository.py
 ```
 
-`config.py` stays transversal; job models, SQL and URL validation live together in `jobs/`. HTTP schemas live in `api/`, separate from the persisted job model. `queue/` holds the M07 message/publisher modules and M09 consumer module; `scraper/` holds the M10 error/domain models and public destination policy (`models.py`, `policy.py`). Scraper network/fetch/extraction modules and worker modules are not created ahead of their tasks.
+`config.py` stays transversal; job models, SQL and URL validation live together in `jobs/`. HTTP schemas live in `api/`, separate from the persisted job model. `queue/` holds the M07 message/publisher modules and M09 consumer module; `scraper/` holds the M10 error/domain models and public destination policy (`models.py`, `policy.py`) and the M11 safe network transport layer (`network.py`). Scraper fetch/extraction modules (M12–M13) and worker modules are not created ahead of their tasks.
 
 Unit tests require no services. PostgreSQL fixtures live only in `tests/integration/conftest.py`; the root `conftest.py` merely registers the explicit connection option so pytest can recognize it consistently. Pytest uses `--import-mode=importlib` to collect identically named unit/integration test modules without package-name collisions or modifying `sys.path`.
 

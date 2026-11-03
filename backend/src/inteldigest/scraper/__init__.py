@@ -1,1 +1,65 @@
-"""Scraper domain models, error classifications, and public destination policy."""
+"""Scraper domain models, error classifications, public destination policy, and safe network transport."""
+
+from inteldigest.scraper.models import (
+    Article,
+    ScrapeError,
+    ScrapeErrorKind,
+    ScrapeStage,
+    ScrapeStats,
+)
+from inteldigest.scraper.network import (
+    DEFAULT_CONNECT_TIMEOUT_SECONDS,
+    DEFAULT_TLS_TIMEOUT_SECONDS,
+    AddressResolver,
+    SafeDialer,
+    SafeTCPConnector,
+    StreamDialer,
+    classify_network_error,
+    create_safe_client_session,
+    create_safe_connector,
+    create_tls_context,
+    dial_public_address,
+    resolve_and_validate_address,
+    split_dial_address,
+    unmap_ip_address,
+)
+from inteldigest.scraper.policy import (
+    SecurityRejectedError,
+    is_legacy_ipv4_form,
+    is_metadata_hostname,
+    is_public_address,
+    valid_dial_host,
+    valid_dial_port,
+    valid_dns_name,
+    validate_url_policy,
+)
+
+__all__ = [
+    "DEFAULT_CONNECT_TIMEOUT_SECONDS",
+    "DEFAULT_TLS_TIMEOUT_SECONDS",
+    "AddressResolver",
+    "Article",
+    "SafeDialer",
+    "SafeTCPConnector",
+    "ScrapeError",
+    "ScrapeErrorKind",
+    "ScrapeStage",
+    "ScrapeStats",
+    "SecurityRejectedError",
+    "StreamDialer",
+    "classify_network_error",
+    "create_safe_client_session",
+    "create_safe_connector",
+    "create_tls_context",
+    "dial_public_address",
+    "is_legacy_ipv4_form",
+    "is_metadata_hostname",
+    "is_public_address",
+    "resolve_and_validate_address",
+    "split_dial_address",
+    "unmap_ip_address",
+    "valid_dial_host",
+    "valid_dial_port",
+    "valid_dns_name",
+    "validate_url_policy",
+]
