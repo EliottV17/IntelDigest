@@ -6,11 +6,10 @@ import math
 import socket
 import ssl
 import time
-from collections.abc import Callable, Sequence
-from typing import Any, Protocol
+from collections.abc import Awaitable, Callable, Sequence
+from typing import Any, Protocol, cast
 
 import aiohttp
-import aiohttp.connector
 
 from inteldigest.scraper.models import ScrapeError, ScrapeErrorKind, ScrapeStage
 from inteldigest.scraper.policy import (
@@ -32,22 +31,22 @@ _ALLOWED_NETWORKS: frozenset[str] = frozenset({"tcp", "tcp4", "tcp6"})
 class AddressResolver(Protocol):
     """Protocol for resolving hostnames to IP addresses."""
 
-    async def resolve(
+    def resolve(
         self, host: str, port: int = 0
-    ) -> Sequence[ipaddress.IPv4Address | ipaddress.IPv6Address | str | Any]: ...
+    ) -> Awaitable[Sequence[ipaddress.IPv4Address | ipaddress.IPv6Address | str | Any]]: ...
 
 
 class StreamDialer(Protocol):
     """Protocol for establishing transport connections."""
 
-    async def dial(
+    def dial(
         self,
         host: str,
         port: int,
         *,
         ssl: ssl.SSLContext | None = None,
         server_hostname: str | None = None,
-    ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter] | Any: ...
+    ) -> Awaitable[tuple[asyncio.StreamReader, asyncio.StreamWriter] | Any]: ...
 
 
 def unmap_ip_address(
@@ -191,15 +190,21 @@ async def _invoke_resolver(
     host: str,
     port: int,
 ) -> Sequence[Any]:
-    if hasattr(resolver, "resolve") and callable(resolver.resolve):
+    resolve_fn = getattr(resolver, "resolve", None)
+    if callable(resolve_fn):
         try:
-            return await resolver.resolve(host, port)
+            res = resolve_fn(host, port)
         except TypeError:
-            return await resolver.resolve(host)
-    try:
-        return await resolver(host, port)
-    except TypeError:
-        return await resolver(host)
+            res = resolve_fn(host)
+    else:
+        caller = cast(Callable[..., Any], resolver)
+        try:
+            res = caller(host, port)
+        except TypeError:
+            res = caller(host)
+    if isinstance(res, Awaitable):
+        return await res
+    return cast(Sequence[Any], res)
 
 
 async def _invoke_dialer(
@@ -210,17 +215,18 @@ async def _invoke_dialer(
     ssl: ssl.SSLContext | None = None,
     server_hostname: str | None = None,
 ) -> Any:
-    if hasattr(dialer, "dial") and callable(dialer.dial):
-        target = dialer.dial
-    else:
-        target = dialer
+    dial_fn = getattr(dialer, "dial", None)
+    target = dial_fn if callable(dial_fn) else cast(Callable[..., Any], dialer)
     try:
-        return await target(host, port, ssl=ssl, server_hostname=server_hostname)
+        res = target(host, port, ssl=ssl, server_hostname=server_hostname)
     except TypeError:
         try:
-            return await target(host, port)
+            res = target(host, port)
         except TypeError:
-            return await target(f"{host}:{port}")
+            res = target(f"{host}:{port}")
+    if isinstance(res, Awaitable):
+        return await res
+    return res
 
 
 def _is_ip_literal(host: str) -> bool:
@@ -483,7 +489,7 @@ class SafeTCPConnector(aiohttp.TCPConnector):
         req: aiohttp.ClientRequest,
         traces: list[Any],
         timeout: Any,
-    ) -> aiohttp.connector.ResponseHandler:
+    ) -> Any:
         if req.proxy is not None:
             raise ScrapeError(
                 ScrapeErrorKind.SECURITY_REJECTED,
@@ -498,7 +504,7 @@ class SafeTCPConnector(aiohttp.TCPConnector):
         host: str,
         port: int,
         traces: Sequence[Any] | None = None,
-    ) -> list[aiohttp.connector.ResolveResult]:
+    ) -> Any:
         dial_ip, dial_port = await resolve_and_validate_address(
             host,
             port,

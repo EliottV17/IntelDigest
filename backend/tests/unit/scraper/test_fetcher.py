@@ -53,8 +53,10 @@ class LocalTestServer:
         await self.runner.setup()
         self.site = web.TCPSite(self.runner, "127.0.0.1", 0)
         await self.site.start()
-        assert self.site._server is not None
-        self.port = self.site._server.sockets[0].getsockname()[1]
+        server = self.site._server
+        assert isinstance(server, asyncio.Server)
+        assert server.sockets
+        self.port = int(server.sockets[0].getsockname()[1])
         return self
 
     async def stop(self) -> None:
@@ -505,8 +507,10 @@ async def test_https_downgrade_rejected_before_http_request() -> None:
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", 0, ssl_context=server_ctx)
         await site.start()
-        assert site._server is not None
-        server_port = site._server.sockets[0].getsockname()[1]
+        server = site._server
+        assert isinstance(server, asyncio.Server)
+        assert server.sockets
+        server_port = int(server.sockets[0].getsockname()[1])
 
         client_tls = create_tls_context(cafile=cert_path)
 

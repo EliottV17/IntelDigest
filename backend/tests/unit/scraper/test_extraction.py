@@ -55,8 +55,10 @@ class LocalTestServer:
         await self.runner.setup()
         self.site = web.TCPSite(self.runner, "127.0.0.1", 0)
         await self.site.start()
-        assert self.site._server is not None
-        self.port = self.site._server.sockets[0].getsockname()[1]
+        server = self.site._server
+        assert isinstance(server, asyncio.Server)
+        assert server.sockets
+        self.port = int(server.sockets[0].getsockname()[1])
         return self
 
     async def stop(self) -> None:
