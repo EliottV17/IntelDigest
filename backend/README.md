@@ -1,6 +1,6 @@
 # IntelDigest Python package tooling
 
-This directory contains an **experimental, installable Python backend package** with configuration, an async job repository, initial non-DNS URL validation, a FastAPI application with health, job lookup and submission endpoints, the Redis Stream v1 job publication contract, and bounded Redis Stream consumption. Worker execution and scraper are not implemented in Python yet; the Go backend remains operational. SQL migrations remain in the repository-root `migrations/` directory.
+This directory contains an **experimental, installable Python backend package** with configuration, an async job repository, initial non-DNS URL validation, a FastAPI application with health, job lookup and submission endpoints, the Redis Stream v1 job publication contract, bounded Redis Stream consumption, and the safe scraper domain models, destination policy, network transport, bounded HTTP fetcher, and Readability extraction pipeline (M10–M13, completing branch B3). Worker execution (B4) is not implemented in Python yet; the Go backend remains operational. SQL migrations remain in the repository-root `migrations/` directory.
 
 ## Quick path
 
@@ -213,7 +213,77 @@ M07 is covered by deterministic unit tests (`.venv/bin/python -m pytest tests/un
 - `await consumer.ack(entry_id: str)` validates a nonblank string entry ID before calling Redis, then invokes `XACK stream group entry_id` under `operation_timeout_seconds`. It **never deletes stream entries** (`XDEL` and `DELETE` are never called). Errors wrap into `QueueError` naming stream, group, and entry ID; `CancelledError` propagates.
 - `await consumer.aclose()` releases the owned Redis client and is idempotent.
 
-Branch B2 (`migration/python-redis-api`) completes the Redis publication and consumption contracts (M07–M09) and the FastAPI submission endpoint (M08) with deterministic unit/HTTP doubles. Running live Redis or PostgreSQL+HTTP instances remains unexecuted. Scraper B3 and worker B4 remain pending in Python.
+Branch B2 (`migration/python-redis-api`) completes the Redis publication and consumption contracts (M07–M09) and the FastAPI submission endpoint (M08) with deterministic unit/HTTP doubles. Running live Redis or PostgreSQL+HTTP instances remains unexecuted.
+
+## Scraper models and public destination policy (M10)
+
+`inteldigest.scraper.models` and `inteldigest.scraper.policy` implement the classified scraper error/domain types and strict non-DNS destination validation policy:
+
+- `Article` (`text`, `requested_url`, `final_url`, `title`, `language`, `fetched_at`) and `ScrapeStats` (`bytes_read = 0`) represent extracted article metadata and per-call decompressed body byte counts.
+- `ScrapeError(kind, stage, message="", *, http_status=0, cause=None)` retains `cause` and `__cause__` for programmatic inspection while `str(err)` emits only allowlisted classification tokens (`scrape <kind> during <stage>` or `scrape <kind> during <stage> (HTTP <status>)` when `100 <= http_status <= 599`), never exposing raw URLs, credentials, or underlying causes. Unknown `kind`/`stage` values render as `"unknown"`.
+- `is_public_address(address)` enforces the IANA IPv4/IPv6 special-purpose address policy (RFC 6890 / RFC 8190), unmapping IPv4-mapped IPv6 addresses, blocking private/loopback/link-local/CGNAT/documentation/multicast/reserved prefixes, blocking Azure WireServer `168.63.129.16/32` while allowing adjacent public addresses (`168.63.129.15`, `168.63.129.17`), rejecting scoped IPv6 addresses, and restricting IPv6 to `2000::/3` global unicast outside `2001::/23`, `2002::/16`, `2001:db8::/32`, `3fff::/20`, `64:ff9b::/96`, and `64:ff9b:1::/48`.
+- `is_legacy_ipv4_form(name)`, `valid_dns_name(host)`, `is_metadata_hostname(host)`, `valid_dial_port(port)`, and `valid_dial_host(host)` reject 1-to-4 component decimal/octal/hex numeric IPv4 grammars (`127.1`, `0177.0.0.1`, `0x7f000001`, `127.0x0.0.1`) and cloud/local metadata hostnames (`localhost`, `metadata`, `metadata.google.internal`, `metadata.google`, `instance-data`, `instance-data.ec2.internal`, `metadata.tencentyun.com`, `metadata.azure.com`, `metadata.aws.internal`, and subdomains) while allowing ordinary DNS labels containing `"0x"` (`0x.org`, `0xdeadbeef.example.com`).
+- `validate_url_policy(raw_url)` enforces absolute `http`/`https` syntax, standard ports (`80` for `http`, `443` for `https`, rejecting leading zeros, empty ports, or cross-scheme ports), no credentials/userinfo, no percent-encoded or scoped hosts, and public IP literal or valid non-metadata DNS hostnames without performing DNS resolution or mutating the URL. Violations raise `ScrapeError(ScrapeErrorKind.SECURITY_REJECTED, ScrapeStage.VALIDATION)` with `SecurityRejectedError` as `__cause__`.
+
+M10 is covered by deterministic unit tests (`.venv/bin/python -m pytest tests/unit/scraper/test_policy.py tests/unit/scraper/test_models.py -q`).
+
+## Scraper network transport and connection pinning (M11)
+
+`inteldigest.scraper.network` implements the safe network transport layer with coupled DNS resolution and public IP connection pinning:
+
+- `SafeDialer` and `dial_public_address`: validate port (`80` or `443`), host, and metadata names before any resolution or dial. Share one connect timeout budget (`connect_timeout_seconds`, default 5.0s) across DNS resolution and TCP dial. IP literals are verified against public address policy and dialed directly without invoking DNS; hostnames are resolved fresh per connection without caching. Empty or mixed DNS answers (any non-public IP) cause immediate rejection (`ScrapeError(SECURITY_REJECTED, FETCH)`). Dial targets are pinned to the approved public IP literal while preserving the original hostname for TLS SNI and HTTP Host.
+- `create_tls_context(*, cafile=None, capath=None, cadata=None)`: creates an `ssl.SSLContext` enforcing minimum TLS 1.2, `CERT_REQUIRED`, and strict hostname verification (`check_hostname=True`), supporting custom test root certificates.
+- `SafeTCPConnector` (subclassing `aiohttp.TCPConnector`) and `create_safe_connector`: enforces fresh coupled resolution, public IP pinning, `force_close=True` (keep-alive disabled), `use_dns_cache=False` (DNS cache disabled), and prohibits HTTP proxies (`proxy` parameters are rejected with `SECURITY_REJECTED`).
+- `create_safe_client_session`: creates an `aiohttp.ClientSession` using `SafeTCPConnector`, `aiohttp.DummyCookieJar()` (no persistent cookies), and `trust_env=False` (ignoring proxy environment variables).
+- `classify_network_error(exc)`: classifies underlying exceptions into `ScrapeError(kind, FETCH)` (`TIMEOUT`, `CANCELED`, or `NETWORK`) while preserving the underlying exception in `cause`/`__cause__` and emitting safe non-leaking string messages (`"scrape network during fetch"`).
+
+M11 is covered by deterministic unit tests (`.venv/bin/python -m pytest tests/unit/scraper/test_network.py -q`). Bounded HTTP fetching/redirects (M12) and Readability extraction (M13) complete branch B3; worker execution (B4) remains pending.
+
+## Bounded HTTP fetcher and redirect safety (M12)
+
+`inteldigest.scraper.fetcher` implements the safe, bounded HTTP fetcher enforcing redirect safety, timeout budgets, and decompressed body limits:
+
+- `ScraperOptions` and `validate_scraper_options(options)`: explicit network and body bounds matching Go and configuration defaults (`connect_timeout_seconds=5.0`, `tls_timeout_seconds=5.0`, `header_timeout_seconds=10.0`, `read_timeout_seconds=10.0`, `request_timeout_seconds=30.0`, `max_body_bytes=5_242_880`, `max_redirects=5`, allowed range `0..10`). All timeouts must be finite positive numbers; `max_body_bytes` must be a positive integer `< sys.maxsize`; `max_redirects` must be in `0..10` (0 disables redirects).
+- `FetchedPage` (`requested_url`, `final_url`, `status_code`, `content_type`, `charset`, `body`, `fetched_at`) and `Fetcher` / `SafeFetcher`: provide `async def fetch(raw_url: str) -> FetchedPage` and `async def fetch_with_stats(raw_url: str, *, stats: ScrapeStats | None = None) -> tuple[FetchedPage, ScrapeStats]` with async context manager support (`async with Fetcher() as fetcher:` and `await fetcher.close()`).
+- SSRF redirect safety: validates the initial URL with `validate_url_policy` before any DNS lookup or dial (`stats.bytes_read == 0` on validation rejection). Uses manual per-hop execution (`allow_redirects=False`) without forwarding `Referer`, `Authorization`, or `Cookie`. Redirect responses (301, 302, 303, 307, 308) are closed immediately without draining bodies. Missing/empty `Location` raises `HTTP_STATUS`. Redirect counts exceeding `max_redirects` raise `ScrapeError(SECURITY_REJECTED, FETCH, "redirect limit exceeded")`. Targets are revalidated via `validate_url_policy` before issuing the next hop request or resolving DNS. HTTPS to HTTP downgrade is rejected as `ScrapeError(SECURITY_REJECTED, VALIDATION, "HTTPS downgrade rejected")`. Each redirect hop resolves DNS fresh through `SafeTCPConnector`. Non-redirect non-2xx status codes raise `ScrapeError(HTTP_STATUS, FETCH, http_status=status)`.
+- Global request deadline & timeout budgets: a single global `request_timeout_seconds` deadline is enforced across all redirect hops and body reading combined (never resetting per hop). If the global deadline expires, `ScrapeError(TIMEOUT, FETCH, "scrape request timed out")` is raised. Per-hop headers must arrive within `header_timeout_seconds` and body read must finish within `read_timeout_seconds` (both bounded by remaining global time). External cancellation raises `ScrapeError(CANCELED, FETCH)`.
+- Decompressed body limits & gzip safety: with `auto_decompress=False`, inspects `Content-Encoding`. If uncompressed (`""` or `"identity"`), rejects `Content-Length > max_body_bytes` immediately, and bounds streamed chunks to `max_body_bytes + 1`, raising `ScrapeError(BODY_TOO_LARGE, FETCH)` if the limit is exceeded. If `"gzip"` or `"x-gzip"`, streams compressed chunks and decompresses incrementally via `zlib.decompressobj(16 + zlib.MAX_WBITS)`, bounding decompressed output to `max_body_bytes + 1` bytes so gzip bombs expanding beyond the limit are aborted immediately without buffering unbounded memory. Corrupt or truncated gzip streams raise `ScrapeError(NETWORK, FETCH)`. Unsupported encodings (`"br"`, `"deflate"`, stacked `"gzip, br"`) raise `ScrapeError(UNSUPPORTED_CONTENT, FETCH)`.
+- MIME type, 512-byte sniffing, and charset validation: if `Content-Type` is missing, the first 512 bytes (`CONTENT_SNIFF_BYTES`) of the decompressed body are sniffed for HTML markers (`<!doctype html`, `<html`, `<head`, `<body`, `<article`) after stripping UTF-8 BOM and whitespace (an oversized body `> max_body_bytes` fails with `BODY_TOO_LARGE`, winning over sniffing). If `Content-Type` is present, it is parsed strictly (defects/unclosed quotes raise `UNSUPPORTED_CONTENT`), allowing only `text/html` and `application/xhtml+xml`. Charset parameters are validated with `codecs.lookup(charset)`, rejecting unknown charsets as `UNSUPPORTED_CONTENT`.
+- `ScrapeStats.bytes_read`: remains 0 if any validation, connection, redirect, status, MIME/charset check, or body read fails; once the final decompressed response body is completely read and validated, `stats.bytes_read = len(body)`.
+
+M12 is covered by deterministic unit tests (`.venv/bin/python -m pytest tests/unit/scraper/test_fetcher.py -q`).
+
+## Article extraction, charset decoding, and safe Scraper pipeline (M13)
+
+`inteldigest.scraper.extraction` implements article readability extraction, post-wire charset decoding, safe classified diagnostics, and the end-to-end `Scraper` pipeline:
+
+- `ExtractedArticle` (`text`, `title`, `language`) and `ArticleExtractor` protocol: represents intermediate extraction results and allows injecting custom synchronous or asynchronous extractors for testing (`(html_text: str, page_url: str = "") -> ExtractedArticle | Awaitable[ExtractedArticle]`).
+- `decode_html_bytes(body: bytes, declared_charset: str | None = None) -> str`: decodes raw wire bytes into Unicode string.
+  - If `declared_charset` is provided and non-empty, validates it via `codecs.lookup(candidate)` and decodes `body` using `errors="replace"`. An unknown charset name raises `ScrapeError(ScrapeErrorKind.UNSUPPORTED_CONTENT, ScrapeStage.FETCH, "HTML charset is unsupported")`.
+  - If `declared_charset` is absent or empty: checks UTF-8/UTF-16 BOMs first (`\xef\xbb\xbf`, `\xff\xfe`, `\xfe\xff`), then inspects the first 1024 bytes of `body` for `<meta charset="...">` or `<meta http-equiv="Content-Type" content="...; charset=...">` declarations. If found, validates the codec name with `codecs.lookup` (raising `UNSUPPORTED_CONTENT` if unknown) and decodes; otherwise defaults to UTF-8 (`body.decode("utf-8", errors="replace")`).
+  - Wire limit safety: charset decoding occurs strictly **after** decompressed `max_body_bytes` is enforced by `Fetcher`. Single-byte encodings (such as ISO-8859-1 `0xe9` -> `"é"`) expanding to multi-byte UTF-8 at exact `max_body_bytes` wire length reach the extractor safely without failing `BODY_TOO_LARGE`. `ScrapeStats.bytes_read` retains the decompressed wire byte count even if extraction subsequently fails.
+- `extract_readability(html_text: str, page_url: str = "") -> ExtractedArticle`:
+  - Uses `readability.Document` (`readability-lxml`) to produce the article summary HTML (`doc.summary(html_partial=True)`).
+  - Cleans the summary with `lxml.html`: removes `<script>`, `<style>`, and `<noscript>` elements, converts `<br>` to line breaks, adds paragraph separation (`\n\n`) around block elements (`<p>`, `<div>`, `<article>`, `<h1>`-`<h6>`, etc.), collapses consecutive empty lines, and strips surrounding whitespace.
+  - Extracts `title`: prefers `doc.short_title()` or `doc.title()`, falling back to `<title>` or `<h1>` from the original document tree.
+  - Extracts `language`: inspects the document root `lang`, `xml:lang`, or `{http://www.w3.org/XML/1998/namespace}lang` attributes, defaulting to `""` if absent.
+  - On fixture `article.html`: extracts title `"Harbor Rescue Report"`, language `"en"`, retains editorial content (`"twelve sailors"`, `"engine stopped"`), and cleanly excludes navigation/advertising clutter (`"Subscribe"`, `"Limited time offer"`, `"must not appear"`).
+  - On fixture `no_article.html`: produces empty text (`""`), which causes `Scraper` to reject the page as `ScrapeError(ScrapeErrorKind.EXTRACTION, ScrapeStage.EXTRACT, "page contains no useful article text")`.
+  - Wraps any unexpected parser or extraction exception into `ScrapeError(ScrapeErrorKind.EXTRACTION, ScrapeStage.EXTRACT, "article extraction failed", cause=exc)` with safe string representation (`"scrape extraction during extract"`), never leaking internal URLs, tokens, or document content.
+- `Scraper`:
+  - Provides `async def scrape(raw_url: str) -> Article` and `async def scrape_with_stats(raw_url: str, *, stats: ScrapeStats | None = None) -> tuple[Article, ScrapeStats]` with async context manager support (`async with Scraper(...) as scraper:` and `await scraper.close()`).
+  - Tracks the global `request_timeout_seconds` budget across fetching, charset decoding, and extraction combined. If the global budget expires during extraction, raises `ScrapeError(ScrapeErrorKind.TIMEOUT, ScrapeStage.FETCH, "scrape request timed out")`. Cancellation raises `ScrapeError(ScrapeErrorKind.CANCELED, ScrapeStage.FETCH, "scrape request was canceled")`.
+  - Non-blocking execution: synchronous extractors (including `extract_readability`) are offloaded to a worker thread via `await asyncio.to_thread(...)` bounded by `asyncio.timeout(remaining_budget)`, ensuring CPU-bound `lxml` parsing does not block the asyncio event loop.
+  - Normalizes `fetched_at` to UTC datetime.
+  - `ScrapeStats.bytes_read` contract: remains 0 on early validation or connection failure; retains decompressed wire byte count when the response body is fully fetched, even if charset decoding or article extraction later fails.
+
+### Extractor differences between Go and Python
+
+- **Text rendering pipeline:** Go's `go-readability` (`codeberg.org/readeck/go-readability/v2`) parses the DOM and renders text directly via its internal `article.RenderText(w)` method. Python's `readability-lxml` produces a partial HTML fragment (`doc.summary(html_partial=True)`), which is parsed by `lxml.html` to extract plain text with block-level double newlines (`\n\n`) and line-level whitespace normalization. Both implementations produce equivalent semantic text and exclude clutter on `article.html`.
+- **Language detection:** Go's `go-readability` exposes `article.Language()` from the HTML root. In Python, `readability-lxml` does not expose a dedicated language property; language is resolved by inspecting `lang` and `xml:lang` on the root `<html>` element parsed with `lxml.html`, returning `"en"` on `article.html`.
+- **Concurrency & event loop safety:** Go executes extraction within its concurrent goroutine model. Python offloads synchronous `readability-lxml`/`lxml` parsing to a worker thread via `asyncio.to_thread`, keeping the asyncio event loop responsive while strictly enforcing the global `request_timeout_seconds` deadline.
+
+Branch B3 (`migration/python-safe-scraper`) is completed with M10–M13. Worker execution (B4 / M14–M16) remains pending.
 
 ## Package layout
 
@@ -239,20 +309,32 @@ src/inteldigest/
     message.py
     publisher.py
     consumer.py
+  scraper/
+    __init__.py
+    extraction.py
+    fetcher.py
+    models.py
+    policy.py
+    network.py
 tests/
   conftest.py
+  fixtures/
+    scraper/
+      article.html
+      no_article.html
   unit/
     test_config.py
     test_package.py
     jobs/{test_repository,test_validation}.py
     api/test_app.py
     queue/{test_message,test_publisher,test_consumer}.py
+    scraper/{test_models,test_policy,test_network,test_fetcher,test_extraction}.py
   integration/
     conftest.py
     test_repository.py
 ```
 
-`config.py` stays transversal; job models, SQL and URL validation live together in `jobs/`. HTTP schemas live in `api/`, separate from the persisted job model. `queue/` holds the M07 message/publisher modules and M09 consumer module; scraper and worker modules are not created ahead of their tasks.
+`config.py` stays transversal; job models, SQL and URL validation live together in `jobs/`. HTTP schemas live in `api/`, separate from the persisted job model. `queue/` holds the M07 message/publisher modules and M09 consumer module; `scraper/` holds the M10 error/domain models and public destination policy (`models.py`, `policy.py`), the M11 safe network transport layer (`network.py`), the M12 bounded HTTP fetcher (`fetcher.py`), and the M13 Readability extraction and Scraper pipeline (`extraction.py`). Scraper fixtures live in `tests/fixtures/scraper/`. Worker modules are not created ahead of their tasks (B4).
 
 Unit tests require no services. PostgreSQL fixtures live only in `tests/integration/conftest.py`; the root `conftest.py` merely registers the explicit connection option so pytest can recognize it consistently. Pytest uses `--import-mode=importlib` to collect identically named unit/integration test modules without package-name collisions or modifying `sys.path`.
 
