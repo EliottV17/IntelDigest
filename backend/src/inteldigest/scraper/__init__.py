@@ -1,5 +1,12 @@
-"""Scraper domain models, error classifications, public destination policy, safe network transport, and bounded fetcher."""
+"""Scraper domain models, error classifications, public destination policy, safe network transport, bounded fetcher, and article extraction."""
 
+from inteldigest.scraper.extraction import (
+    ArticleExtractor,
+    ExtractedArticle,
+    Scraper,
+    decode_html_bytes,
+    extract_readability,
+)
 from inteldigest.scraper.fetcher import (
     CONTENT_SNIFF_BYTES,
     DEFAULT_SCRAPER_CONNECT_TIMEOUT_SECONDS,
@@ -65,6 +72,8 @@ __all__ = [
     "MAX_SCRAPER_REDIRECTS",
     "AddressResolver",
     "Article",
+    "ArticleExtractor",
+    "ExtractedArticle",
     "FetchedPage",
     "Fetcher",
     "SafeDialer",
@@ -74,6 +83,7 @@ __all__ = [
     "ScrapeErrorKind",
     "ScrapeStage",
     "ScrapeStats",
+    "Scraper",
     "ScraperOptions",
     "SecurityRejectedError",
     "StreamDialer",
@@ -81,8 +91,10 @@ __all__ = [
     "create_safe_client_session",
     "create_safe_connector",
     "create_tls_context",
+    "decode_html_bytes",
     "default_options",
     "dial_public_address",
+    "extract_readability",
     "is_legacy_ipv4_form",
     "is_metadata_hostname",
     "is_public_address",
