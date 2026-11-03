@@ -1,6 +1,6 @@
 # IntelDigest Python package tooling
 
-This directory contains an **experimental, installable Python backend package** with configuration, an async job repository, initial non-DNS URL validation, a FastAPI application with health, job lookup and submission endpoints, the Redis Stream v1 job publication contract, and bounded Redis Stream consumption. Worker execution and scraper are not implemented in Python yet; the Go backend remains operational. SQL migrations remain in the repository-root `migrations/` directory.
+This directory contains an **experimental, installable Python backend package** with configuration, an async job repository, initial non-DNS URL validation, a FastAPI application with health, job lookup and submission endpoints, the Redis Stream v1 job publication contract, bounded Redis Stream consumption, and the scraper destination validation policy and error models. Scraper network transport/fetching/extraction (M11–M13) and worker execution (B4) are not implemented in Python yet; the Go backend remains operational. SQL migrations remain in the repository-root `migrations/` directory.
 
 ## Quick path
 
@@ -213,7 +213,19 @@ M07 is covered by deterministic unit tests (`.venv/bin/python -m pytest tests/un
 - `await consumer.ack(entry_id: str)` validates a nonblank string entry ID before calling Redis, then invokes `XACK stream group entry_id` under `operation_timeout_seconds`. It **never deletes stream entries** (`XDEL` and `DELETE` are never called). Errors wrap into `QueueError` naming stream, group, and entry ID; `CancelledError` propagates.
 - `await consumer.aclose()` releases the owned Redis client and is idempotent.
 
-Branch B2 (`migration/python-redis-api`) completes the Redis publication and consumption contracts (M07–M09) and the FastAPI submission endpoint (M08) with deterministic unit/HTTP doubles. Running live Redis or PostgreSQL+HTTP instances remains unexecuted. Scraper B3 and worker B4 remain pending in Python.
+Branch B2 (`migration/python-redis-api`) completes the Redis publication and consumption contracts (M07–M09) and the FastAPI submission endpoint (M08) with deterministic unit/HTTP doubles. Running live Redis or PostgreSQL+HTTP instances remains unexecuted.
+
+## Scraper models and public destination policy (M10)
+
+`inteldigest.scraper.models` and `inteldigest.scraper.policy` implement the classified scraper error/domain types and strict non-DNS destination validation policy:
+
+- `Article` (`text`, `requested_url`, `final_url`, `title`, `language`, `fetched_at`) and `ScrapeStats` (`bytes_read = 0`) represent extracted article metadata and per-call decompressed body byte counts.
+- `ScrapeError(kind, stage, message="", *, http_status=0, cause=None)` retains `cause` and `__cause__` for programmatic inspection while `str(err)` emits only allowlisted classification tokens (`scrape <kind> during <stage>` or `scrape <kind> during <stage> (HTTP <status>)` when `100 <= http_status <= 599`), never exposing raw URLs, credentials, or underlying causes. Unknown `kind`/`stage` values render as `"unknown"`.
+- `is_public_address(address)` enforces the IANA IPv4/IPv6 special-purpose address policy (RFC 6890 / RFC 8190), unmapping IPv4-mapped IPv6 addresses, blocking private/loopback/link-local/CGNAT/documentation/multicast/reserved prefixes, blocking Azure WireServer `168.63.129.16/32` while allowing adjacent public addresses (`168.63.129.15`, `168.63.129.17`), rejecting scoped IPv6 addresses, and restricting IPv6 to `2000::/3` global unicast outside `2001::/23`, `2002::/16`, `2001:db8::/32`, `3fff::/20`, `64:ff9b::/96`, and `64:ff9b:1::/48`.
+- `is_legacy_ipv4_form(name)`, `valid_dns_name(host)`, `is_metadata_hostname(host)`, `valid_dial_port(port)`, and `valid_dial_host(host)` reject 1-to-4 component decimal/octal/hex numeric IPv4 grammars (`127.1`, `0177.0.0.1`, `0x7f000001`, `127.0x0.0.1`) and cloud/local metadata hostnames (`localhost`, `metadata`, `metadata.google.internal`, `metadata.google`, `instance-data`, `instance-data.ec2.internal`, `metadata.tencentyun.com`, `metadata.azure.com`, `metadata.aws.internal`, and subdomains) while allowing ordinary DNS labels containing `"0x"` (`0x.org`, `0xdeadbeef.example.com`).
+- `validate_url_policy(raw_url)` enforces absolute `http`/`https` syntax, standard ports (`80` for `http`, `443` for `https`, rejecting leading zeros, empty ports, or cross-scheme ports), no credentials/userinfo, no percent-encoded or scoped hosts, and public IP literal or valid non-metadata DNS hostnames without performing DNS resolution or mutating the URL. Violations raise `ScrapeError(ScrapeErrorKind.SECURITY_REJECTED, ScrapeStage.VALIDATION)` with `SecurityRejectedError` as `__cause__`.
+
+M10 is covered by deterministic unit tests (`.venv/bin/python -m pytest tests/unit/scraper -q`). Scraper network dialing (M11), bounded HTTP fetching/redirects (M12), Readability extraction (M13), and worker execution (B4) remain pending.
 
 ## Package layout
 
@@ -239,6 +251,10 @@ src/inteldigest/
     message.py
     publisher.py
     consumer.py
+  scraper/
+    __init__.py
+    models.py
+    policy.py
 tests/
   conftest.py
   unit/
@@ -247,12 +263,13 @@ tests/
     jobs/{test_repository,test_validation}.py
     api/test_app.py
     queue/{test_message,test_publisher,test_consumer}.py
+    scraper/{test_models,test_policy}.py
   integration/
     conftest.py
     test_repository.py
 ```
 
-`config.py` stays transversal; job models, SQL and URL validation live together in `jobs/`. HTTP schemas live in `api/`, separate from the persisted job model. `queue/` holds the M07 message/publisher modules and M09 consumer module; scraper and worker modules are not created ahead of their tasks.
+`config.py` stays transversal; job models, SQL and URL validation live together in `jobs/`. HTTP schemas live in `api/`, separate from the persisted job model. `queue/` holds the M07 message/publisher modules and M09 consumer module; `scraper/` holds the M10 error/domain models and public destination policy (`models.py`, `policy.py`). Scraper network/fetch/extraction modules and worker modules are not created ahead of their tasks.
 
 Unit tests require no services. PostgreSQL fixtures live only in `tests/integration/conftest.py`; the root `conftest.py` merely registers the explicit connection option so pytest can recognize it consistently. Pytest uses `--import-mode=importlib` to collect identically named unit/integration test modules without package-name collisions or modifying `sys.path`.
 
