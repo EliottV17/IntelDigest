@@ -1,5 +1,22 @@
-"""Scraper domain models, error classifications, public destination policy, and safe network transport."""
+"""Scraper domain models, error classifications, public destination policy, safe network transport, and bounded fetcher."""
 
+from inteldigest.scraper.fetcher import (
+    CONTENT_SNIFF_BYTES,
+    DEFAULT_SCRAPER_CONNECT_TIMEOUT_SECONDS,
+    DEFAULT_SCRAPER_HEADER_TIMEOUT_SECONDS,
+    DEFAULT_SCRAPER_MAX_BODY_BYTES,
+    DEFAULT_SCRAPER_MAX_REDIRECTS,
+    DEFAULT_SCRAPER_READ_TIMEOUT_SECONDS,
+    DEFAULT_SCRAPER_REQUEST_TIMEOUT_SECONDS,
+    DEFAULT_SCRAPER_TLS_TIMEOUT_SECONDS,
+    MAX_SCRAPER_REDIRECTS,
+    FetchedPage,
+    Fetcher,
+    SafeFetcher,
+    ScraperOptions,
+    default_options,
+    validate_scraper_options,
+)
 from inteldigest.scraper.models import (
     Article,
     ScrapeError,
@@ -35,22 +52,36 @@ from inteldigest.scraper.policy import (
 )
 
 __all__ = [
+    "CONTENT_SNIFF_BYTES",
     "DEFAULT_CONNECT_TIMEOUT_SECONDS",
+    "DEFAULT_SCRAPER_CONNECT_TIMEOUT_SECONDS",
+    "DEFAULT_SCRAPER_HEADER_TIMEOUT_SECONDS",
+    "DEFAULT_SCRAPER_MAX_BODY_BYTES",
+    "DEFAULT_SCRAPER_MAX_REDIRECTS",
+    "DEFAULT_SCRAPER_READ_TIMEOUT_SECONDS",
+    "DEFAULT_SCRAPER_REQUEST_TIMEOUT_SECONDS",
+    "DEFAULT_SCRAPER_TLS_TIMEOUT_SECONDS",
     "DEFAULT_TLS_TIMEOUT_SECONDS",
+    "MAX_SCRAPER_REDIRECTS",
     "AddressResolver",
     "Article",
+    "FetchedPage",
+    "Fetcher",
     "SafeDialer",
+    "SafeFetcher",
     "SafeTCPConnector",
     "ScrapeError",
     "ScrapeErrorKind",
     "ScrapeStage",
     "ScrapeStats",
+    "ScraperOptions",
     "SecurityRejectedError",
     "StreamDialer",
     "classify_network_error",
     "create_safe_client_session",
     "create_safe_connector",
     "create_tls_context",
+    "default_options",
     "dial_public_address",
     "is_legacy_ipv4_form",
     "is_metadata_hostname",
@@ -61,5 +92,6 @@ __all__ = [
     "valid_dial_host",
     "valid_dial_port",
     "valid_dns_name",
+    "validate_scraper_options",
     "validate_url_policy",
 ]

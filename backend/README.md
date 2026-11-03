@@ -1,6 +1,6 @@
 # IntelDigest Python package tooling
 
-This directory contains an **experimental, installable Python backend package** with configuration, an async job repository, initial non-DNS URL validation, a FastAPI application with health, job lookup and submission endpoints, the Redis Stream v1 job publication contract, bounded Redis Stream consumption, and the scraper destination validation policy, error models, and safe coupled network transport (M10–M11). Bounded HTTP fetching/redirects (M12), Readability extraction (M13), and worker execution (B4) are not implemented in Python yet; the Go backend remains operational. SQL migrations remain in the repository-root `migrations/` directory.
+This directory contains an **experimental, installable Python backend package** with configuration, an async job repository, initial non-DNS URL validation, a FastAPI application with health, job lookup and submission endpoints, the Redis Stream v1 job publication contract, bounded Redis Stream consumption, and the scraper destination validation policy, error models, safe coupled network transport, and bounded HTTP fetcher with redirect safety (M10–M12). Readability extraction (M13) and worker execution (B4) are not implemented in Python yet; the Go backend remains operational. SQL migrations remain in the repository-root `migrations/` directory.
 
 ## Quick path
 
@@ -239,6 +239,20 @@ M10 is covered by deterministic unit tests (`.venv/bin/python -m pytest tests/un
 
 M11 is covered by deterministic unit tests (`.venv/bin/python -m pytest tests/unit/scraper/test_network.py -q`). Bounded HTTP fetching/redirects (M12), Readability extraction (M13), and worker execution (B4) remain pending.
 
+## Bounded HTTP fetcher and redirect safety (M12)
+
+`inteldigest.scraper.fetcher` implements the safe, bounded HTTP fetcher enforcing redirect safety, timeout budgets, and decompressed body limits:
+
+- `ScraperOptions` and `validate_scraper_options(options)`: explicit network and body bounds matching Go and configuration defaults (`connect_timeout_seconds=5.0`, `tls_timeout_seconds=5.0`, `header_timeout_seconds=10.0`, `read_timeout_seconds=10.0`, `request_timeout_seconds=30.0`, `max_body_bytes=5_242_880`, `max_redirects=5`, allowed range `0..10`). All timeouts must be finite positive numbers; `max_body_bytes` must be a positive integer `< sys.maxsize`; `max_redirects` must be in `0..10` (0 disables redirects).
+- `FetchedPage` (`requested_url`, `final_url`, `status_code`, `content_type`, `charset`, `body`, `fetched_at`) and `Fetcher` / `SafeFetcher`: provide `async def fetch(raw_url: str) -> FetchedPage` and `async def fetch_with_stats(raw_url: str, *, stats: ScrapeStats | None = None) -> tuple[FetchedPage, ScrapeStats]` with async context manager support (`async with Fetcher() as fetcher:` and `await fetcher.close()`).
+- SSRF redirect safety: validates the initial URL with `validate_url_policy` before any DNS lookup or dial (`stats.bytes_read == 0` on validation rejection). Uses manual per-hop execution (`allow_redirects=False`) without forwarding `Referer`, `Authorization`, or `Cookie`. Redirect responses (301, 302, 303, 307, 308) are closed immediately without draining bodies. Missing/empty `Location` raises `HTTP_STATUS`. Redirect counts exceeding `max_redirects` raise `ScrapeError(SECURITY_REJECTED, FETCH, "redirect limit exceeded")`. Targets are revalidated via `validate_url_policy` before issuing the next hop request or resolving DNS. HTTPS to HTTP downgrade is rejected as `ScrapeError(SECURITY_REJECTED, VALIDATION, "HTTPS downgrade rejected")`. Each redirect hop resolves DNS fresh through `SafeTCPConnector`. Non-redirect non-2xx status codes raise `ScrapeError(HTTP_STATUS, FETCH, http_status=status)`.
+- Global request deadline & timeout budgets: a single global `request_timeout_seconds` deadline is enforced across all redirect hops and body reading combined (never resetting per hop). If the global deadline expires, `ScrapeError(TIMEOUT, FETCH, "scrape request timed out")` is raised. Per-hop headers must arrive within `header_timeout_seconds` and body read must finish within `read_timeout_seconds` (both bounded by remaining global time). External cancellation raises `ScrapeError(CANCELED, FETCH)`.
+- Decompressed body limits & gzip safety: with `auto_decompress=False`, inspects `Content-Encoding`. If uncompressed (`""` or `"identity"`), rejects `Content-Length > max_body_bytes` immediately, and bounds streamed chunks to `max_body_bytes + 1`, raising `ScrapeError(BODY_TOO_LARGE, FETCH)` if the limit is exceeded. If `"gzip"` or `"x-gzip"`, streams compressed chunks and decompresses incrementally via `zlib.decompressobj(16 + zlib.MAX_WBITS)`, bounding decompressed output to `max_body_bytes + 1` bytes so gzip bombs expanding beyond the limit are aborted immediately without buffering unbounded memory. Corrupt or truncated gzip streams raise `ScrapeError(NETWORK, FETCH)`. Unsupported encodings (`"br"`, `"deflate"`, stacked `"gzip, br"`) raise `ScrapeError(UNSUPPORTED_CONTENT, FETCH)`.
+- MIME type, 512-byte sniffing, and charset validation: if `Content-Type` is missing, the first 512 bytes (`CONTENT_SNIFF_BYTES`) of the decompressed body are sniffed for HTML markers (`<!doctype html`, `<html`, `<head`, `<body`, `<article`) after stripping UTF-8 BOM and whitespace (an oversized body `> max_body_bytes` fails with `BODY_TOO_LARGE`, winning over sniffing). If `Content-Type` is present, it is parsed strictly (defects/unclosed quotes raise `UNSUPPORTED_CONTENT`), allowing only `text/html` and `application/xhtml+xml`. Charset parameters are validated with `codecs.lookup(charset)`, rejecting unknown charsets as `UNSUPPORTED_CONTENT`.
+- `ScrapeStats.bytes_read`: remains 0 if any validation, connection, redirect, status, MIME/charset check, or body read fails; once the final decompressed response body is completely read and validated, `stats.bytes_read = len(body)`.
+
+M12 is covered by deterministic unit tests (`.venv/bin/python -m pytest tests/unit/scraper/test_fetcher.py -q`). Readability extraction (M13) and worker execution (B4) remain pending.
+
 ## Package layout
 
 The approved migration layout is recorded in [PLAN-MIGRATION.md](../PLAN-MIGRATION.md#31-estructura-de-paquetes-aprobada). Only the modules needed by completed/current tasks exist:
@@ -265,6 +279,7 @@ src/inteldigest/
     consumer.py
   scraper/
     __init__.py
+    fetcher.py
     models.py
     policy.py
     network.py
@@ -276,13 +291,13 @@ tests/
     jobs/{test_repository,test_validation}.py
     api/test_app.py
     queue/{test_message,test_publisher,test_consumer}.py
-    scraper/{test_models,test_policy,test_network}.py
+    scraper/{test_models,test_policy,test_network,test_fetcher}.py
   integration/
     conftest.py
     test_repository.py
 ```
 
-`config.py` stays transversal; job models, SQL and URL validation live together in `jobs/`. HTTP schemas live in `api/`, separate from the persisted job model. `queue/` holds the M07 message/publisher modules and M09 consumer module; `scraper/` holds the M10 error/domain models and public destination policy (`models.py`, `policy.py`) and the M11 safe network transport layer (`network.py`). Scraper fetch/extraction modules (M12–M13) and worker modules are not created ahead of their tasks.
+`config.py` stays transversal; job models, SQL and URL validation live together in `jobs/`. HTTP schemas live in `api/`, separate from the persisted job model. `queue/` holds the M07 message/publisher modules and M09 consumer module; `scraper/` holds the M10 error/domain models and public destination policy (`models.py`, `policy.py`), the M11 safe network transport layer (`network.py`), and the M12 bounded HTTP fetcher (`fetcher.py`). Scraper extraction module (M13) and worker modules are not created ahead of their tasks.
 
 Unit tests require no services. PostgreSQL fixtures live only in `tests/integration/conftest.py`; the root `conftest.py` merely registers the explicit connection option so pytest can recognize it consistently. Pytest uses `--import-mode=importlib` to collect identically named unit/integration test modules without package-name collisions or modifying `sys.path`.
 

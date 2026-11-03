@@ -587,6 +587,7 @@ def create_safe_client_session(
     connect_timeout_seconds: float = DEFAULT_CONNECT_TIMEOUT_SECONDS,
     resolver: AddressResolver | Callable[..., Any] | None = None,
     ssl_context: ssl.SSLContext | None = None,
+    test_dial_target: tuple[str, int] | None = None,
     **kwargs: Any,
 ) -> aiohttp.ClientSession:
     """Create a ClientSession with safe defaults (no env proxies, dummy cookie jar, SafeTCPConnector)."""
@@ -595,6 +596,7 @@ def create_safe_client_session(
             connect_timeout_seconds=connect_timeout_seconds,
             resolver=resolver,
             ssl_context=ssl_context,
+            test_dial_target=test_dial_target,
         )
     return aiohttp.ClientSession(
         connector=connector,
