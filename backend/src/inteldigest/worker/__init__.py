@@ -1,5 +1,13 @@
-"""Worker job processor, claim/ACK rules, and synchronous metadata receiver (M14)."""
+"""Worker job processor, claim/ACK rules, receiver, and concurrency pool (M15)."""
 
+from inteldigest.worker.pool import (
+    JobProcessor,
+    Pool,
+    PoolGroupMissingError,
+    PoolOptions,
+    QueueReader,
+    default_pool_options,
+)
 from inteldigest.worker.processor import (
     STATUS_COMPLETED,
     STATUS_FAILED,
@@ -35,16 +43,22 @@ __all__ = [
     "STATUS_PROCESSING",
     "Acker",
     "ArticleScraper",
+    "JobProcessor",
     "JobRepo",
     "MetadataReceiver",
     "Outcome",
+    "Pool",
+    "PoolGroupMissingError",
+    "PoolOptions",
     "ProcessError",
     "Processor",
     "ProcessorOptions",
+    "QueueReader",
     "Receiver",
     "Result",
     "classify_scrape_error",
     "decode_delivery",
+    "default_pool_options",
     "diagnostic_reason",
     "safe_kind",
     "safe_scrape_error",
