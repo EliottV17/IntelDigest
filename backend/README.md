@@ -1,6 +1,6 @@
 # IntelDigest Python package tooling
 
-This directory contains an **experimental, installable Python backend package** with configuration, an async job repository, initial non-DNS URL validation, a FastAPI application with health, job lookup and submission endpoints, the Redis Stream v1 job publication contract, bounded Redis Stream consumption, the safe scraper domain models, destination policy, network transport, bounded HTTP fetcher, and Readability extraction pipeline (M10–M13, completing branch B3), and the worker job processor, atomic claim/ACK rules, and synchronous metadata receiver (M14, opening branch B4). The worker concurrency pool (M15) and standalone process entrypoint (M16) remain pending in Python; the Go backend remains operational. SQL migrations remain in the repository-root `migrations/` directory.
+This directory contains an **experimental, installable Python backend package** with configuration, an async job repository, initial non-DNS URL validation, a FastAPI application with health, job lookup and submission endpoints, the Redis Stream v1 job publication contract, bounded Redis Stream consumption, the safe scraper domain models, destination policy, network transport, bounded HTTP fetcher, and Readability extraction pipeline (M10–M13, completing branch B3), and the worker job processor, atomic claim/ACK rules, synchronous metadata receiver, and bounded concurrency pool with graceful drain (M14–M15 on branch B4). The standalone worker process entrypoint (M16) remains pending in Python; the Go backend remains operational. SQL migrations remain in the repository-root `migrations/` directory.
 
 ## Quick path
 
@@ -301,6 +301,29 @@ Branch B3 (`migration/python-safe-scraper`) is completed with M10–M13. Worker 
 
 M14 is covered by deterministic unit tests (`.venv/bin/python -m pytest tests/unit/worker/test_processor.py -q`).
 
+## Worker concurrency pool and graceful drain (M15)
+
+`inteldigest.worker.pool` implements fixed concurrency without an accumulating in-memory queue, admission closure vs. confirmed job drain timers, fatal missing consumer group propagation, and task joining:
+
+- `PoolOptions` (`pool_size=4`, `shutdown_timeout_seconds=10.0`, `backoff_delay_seconds=1.0`, `logger=None`) and `default_pool_options()`: configuration options validating bounded worker concurrency (`1 <= pool_size <= 64`) and positive finite timeout durations.
+- `QueueReader` (`async def read(self) -> Delivery | None`) and `JobProcessor` (`async def process(self, delivery, *, admission_closed=None, job_canceled=None) -> tuple[Outcome, ProcessError | None]`) protocols: separate caller-owned dependencies from worker pool goroutine/task lifetime.
+- `Pool(reader, processor, options=None)`: validates required dependencies and bounded options without opening, owning, or closing external resources.
+  - **Fixed concurrency without an accumulating in-memory queue:** `await pool.run(stop_event=None)` starts exactly `pool_size` sequential worker tasks (`asyncio.Task`). While all `pool_size` workers are busy processing deliveries, no extra `reader.read()` calls are made. As each worker finishes a job, that specific slot reads the next delivery.
+  - **Single-run lifecycle & pre-stopped behavior:** a `Pool` instance can only be run once; a second `run()` call raises `RuntimeError("worker pool can only be run once")`. If `stop_event` is already set (or `pool.stop()` was called, or `run()` was canceled before reading), `run()` exits cleanly without calling `reader.read()`.
+  - **Read handling and safe logging:**
+    - Normal finite block timeout (`None`): the worker immediately loops to read again while admission is open.
+    - Fatal missing consumer group (`ConsumerGroupMissingError` anywhere in the exception cause chain): closes admission immediately, initiates shutdown drain, and after all worker tasks join, raises `PoolGroupMissingError("worker pool stopped: consumer group is missing")` with `__cause__` preserving the original error so `is_group_missing(err)` returns `True` and `str(err)` never leaks sensitive outer causes.
+    - Transient read error: logs warning `worker_pool_read_failed code=transient` without leaking exception strings, and waits `backoff_delay_seconds` interruptibly by `admission_closed` (or stop/cancel) before retrying.
+    - Late delivery after admission closes: if `reader.read()` returns a `Delivery` after `admission_closed` is set, the delivery is ignored and never passed to `processor.process`.
+    - Per-job error: logs warning `worker_pool_job_failed code=processing` without leaking error details and continues without retrying.
+  - **Graceful shutdown and drain window:** when `stop_event` is set, `pool.stop()` is called, or `run()` task cancellation / fatal NOGROUP occurs:
+    1. `admission_closed` is set immediately (and in-flight `reader.read()` or backoff wait is canceled/interrupted if needed, respecting readers that complete or block). If a reader task is blocked, the drain timer (`shutdown_timeout_seconds`) starts as soon as admission closes and sets `job_canceled` when `shutdown_timeout_seconds` expires even while the blocked reader and confirmed job are still running.
+    2. Confirmed in-flight jobs receive `admission_closed` and `job_canceled` events; `job_canceled` is **not** set when admission closes—it is set only after `shutdown_timeout_seconds` elapses (or when all workers finish earlier).
+    3. `run()` waits for **all** worker tasks (both readers and processors) to finish before returning.
+    4. `Pool` never closes caller-owned `reader` or `processor` resources.
+
+M15 is covered by deterministic unit tests (`.venv/bin/python -m pytest tests/unit/worker/test_pool.py -q`).
+
 ## Package layout
 
 The approved migration layout is recorded in [PLAN-MIGRATION.md](../PLAN-MIGRATION.md#31-estructura-de-paquetes-aprobada). Only the modules needed by completed/current tasks exist:
@@ -334,6 +357,7 @@ src/inteldigest/
     network.py
   worker/
     __init__.py
+    pool.py
     processor.py
     receiver.py
 tests/
@@ -349,13 +373,13 @@ tests/
     api/test_app.py
     queue/{test_message,test_publisher,test_consumer}.py
     scraper/{test_models,test_policy,test_network,test_fetcher,test_extraction}.py
-    worker/test_processor.py
+    worker/{test_processor,test_pool}.py
   integration/
     conftest.py
     test_repository.py
 ```
 
-`config.py` stays transversal; job models, SQL and URL validation live together in `jobs/`. HTTP schemas live in `api/`, separate from the persisted job model. `queue/` holds the M07 message/publisher modules and M09 consumer module; `scraper/` holds the M10 error/domain models and public destination policy (`models.py`, `policy.py`), the M11 safe network transport layer (`network.py`), the M12 bounded HTTP fetcher (`fetcher.py`), and the M13 Readability extraction and Scraper pipeline (`extraction.py`). Scraper fixtures live in `tests/fixtures/scraper/`. `worker/` holds the M14 job processor and synchronous metadata receiver (`processor.py`, `receiver.py`); `pool.py` (M15) and `__main__.py` (M16) are not created ahead of their tasks.
+`config.py` stays transversal; job models, SQL and URL validation live together in `jobs/`. HTTP schemas live in `api/`, separate from the persisted job model. `queue/` holds the M07 message/publisher modules and M09 consumer module; `scraper/` holds the M10 error/domain models and public destination policy (`models.py`, `policy.py`), the M11 safe network transport layer (`network.py`), the M12 bounded HTTP fetcher (`fetcher.py`), and the M13 Readability extraction and Scraper pipeline (`extraction.py`). Scraper fixtures live in `tests/fixtures/scraper/`. `worker/` holds the M14 job processor and synchronous metadata receiver (`processor.py`, `receiver.py`) and the M15 concurrency pool and drain coordinator (`pool.py`); `__main__.py` (M16) is not created ahead of its task.
 
 Unit tests require no services. PostgreSQL fixtures live only in `tests/integration/conftest.py`; the root `conftest.py` merely registers the explicit connection option so pytest can recognize it consistently. Pytest uses `--import-mode=importlib` to collect identically named unit/integration test modules without package-name collisions or modifying `sys.path`.
 
