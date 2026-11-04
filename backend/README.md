@@ -1,6 +1,6 @@
 # IntelDigest Python package tooling
 
-This directory contains an **experimental, installable Python backend package** with configuration, an async job repository, initial non-DNS URL validation, a FastAPI application with health, job lookup and submission endpoints, the Redis Stream v1 job publication contract, bounded Redis Stream consumption, and the safe scraper domain models, destination policy, network transport, bounded HTTP fetcher, and Readability extraction pipeline (M10–M13, completing branch B3). Worker execution (B4) is not implemented in Python yet; the Go backend remains operational. SQL migrations remain in the repository-root `migrations/` directory.
+This directory contains an **experimental, installable Python backend package** with configuration, an async job repository, initial non-DNS URL validation, a FastAPI application with health, job lookup and submission endpoints, the Redis Stream v1 job publication contract, bounded Redis Stream consumption, the safe scraper domain models, destination policy, network transport, bounded HTTP fetcher, and Readability extraction pipeline (M10–M13, completing branch B3), and the worker job processor, atomic claim/ACK rules, and synchronous metadata receiver (M14, opening branch B4). The worker concurrency pool (M15) and standalone process entrypoint (M16) remain pending in Python; the Go backend remains operational. SQL migrations remain in the repository-root `migrations/` directory.
 
 ## Quick path
 
@@ -283,7 +283,23 @@ M12 is covered by deterministic unit tests (`.venv/bin/python -m pytest tests/un
 - **Language detection:** Go's `go-readability` exposes `article.Language()` from the HTML root. In Python, `readability-lxml` does not expose a dedicated language property; language is resolved by inspecting `lang` and `xml:lang` on the root `<html>` element parsed with `lxml.html`, returning `"en"` on `article.html`.
 - **Concurrency & event loop safety:** Go executes extraction within its concurrent goroutine model. Python offloads synchronous `readability-lxml`/`lxml` parsing to a worker thread via `asyncio.to_thread`, keeping the asyncio event loop responsive while strictly enforcing the global `request_timeout_seconds` deadline.
 
-Branch B3 (`migration/python-safe-scraper`) is completed with M10–M13. Worker execution (B4 / M14–M16) remains pending.
+Branch B3 (`migration/python-safe-scraper`) is completed with M10–M13. Worker processing and acknowledgement rules (M14) open branch B4 (`migration/python-worker`), while the worker concurrency pool (M15) and standalone entrypoint (M16) remain pending.
+
+## Worker job processor, claim rules, and synchronous metadata receiver (M14)
+
+`inteldigest.worker.receiver` and `inteldigest.worker.processor` implement single-delivery job processing, atomic claim and duplicate rules, acknowledgement boundaries, and synchronous in-memory result delivery without creating new terminal states:
+
+- `Result(job_id, article=None, error=None)` and `validate_result(result)`: represents the synchronous in-memory handoff for one claimed job. Validation requires a non-nil `UUID` and **exactly one** of `article` (`Article`) or `error` (`ScrapeError`).
+- `Receiver` protocol and `MetadataReceiver`: consumes `Result` synchronously (`await receiver.receive(result)`). `MetadataReceiver` validates the result and logs only bounded technical metadata (`worker_result_received` with `job_id`, `result=article`, `text_bytes`, `title_present`, `language_present` or `result=scrape_error`, allowlisted `kind`, `stage`, and `http_status`), never logging or persisting article text, titles, or URLs.
+- `Outcome` (`SKIPPED`, `PROCESSING_DUPLICATE`, `TERMINAL_DUPLICATE`, `SUCCEEDED`, `SCRAPE_FAILED`, `OPERATIONAL_CANCELED`, `ERROR`) and `ProcessError(code, cause=None)`: `str(err)` emits only `"worker processing failed: <code>"` while preserving `cause` and `__cause__` for programmatic inspection without leaking database credentials, URLs, or payloads.
+- `Processor(repo, acker, scraper, receiver, options=ProcessorOptions(...))`: validates required dependencies and finite positive `db_timeout_seconds` and `queue_operation_timeout_seconds`. `await processor.process(delivery, *, admission_closed=None, job_canceled=None) -> tuple[Outcome, ProcessError | None]` executes the C3–C6 and C8 rules:
+  - **Payload validation (C4):** decodes `delivery.fields["data"]` as a JSON object and validates it against `Message` (`schema_version == 1`, non-nil `job_id`, valid HTTP(S) `url`). Invalid payloads return `(Outcome.SKIPPED, ProcessError("invalid_payload"))` without querying PostgreSQL, claiming, scraping, delivering, or ACKing.
+  - **Pre-claim lookup & identity verification (C3, C5):** fetches the stored job under `db_timeout_seconds` and verifies `job.id == message.job_id` and `job.url == message.url`. If the job is already terminal (`completed` or `failed`), ACKs the original `delivery.entry_id` under `queue_operation_timeout_seconds` and returns `(Outcome.TERMINAL_DUPLICATE, None)`. If `processing`, returns `(Outcome.PROCESSING_DUPLICATE, None)` without ACKing or scraping. Unknown statuses or mismatched identity/URL return `Outcome.SKIPPED` with `ProcessError`.
+  - **Atomic claim & contention requery (C3, C5):** calls `await repo.try_mark_processing(job_id)` under `db_timeout_seconds`. Only one concurrent caller wins. If the claim returns `False`, the loser requeries `get_job_by_id(job_id)`: if now terminal (`completed`/`failed`), it ACKs and returns `Outcome.TERMINAL_DUPLICATE`; if now `processing`, it returns `(Outcome.PROCESSING_DUPLICATE, None)` without ACKing; if still `pending`, it returns `(Outcome.SKIPPED, ProcessError("claim_lost_unresolved"))` without ACKing or scraping. Uncertain claim errors never scrape or ACK.
+  - **Admission vs. job lifetime separation (C6):** if `admission_closed` is set before or during pre-claim lookup, claim, or claim-loss requery, processing stops with `(Outcome.SKIPPED, ProcessError("admission_closed"))` before claiming or scraping. Once a worker wins the claim, `admission_closed` no longer stops it: the confirmed job drains through scraping, diagnostic recording, and receiver handoff unless `job_canceled` fires (which returns `(Outcome.OPERATIONAL_CANCELED, ProcessError("job_context_canceled"))` without recording diagnostics, delivering output, or ACKing).
+  - **Scraping, safe diagnostics, and non-ACK rule (C5, C8):** the claim winner scrapes `job.url` via `scraper.scrape_with_stats`. On success, it delivers `Result(job_id, article=article)` to `receiver` and returns `(Outcome.SUCCEEDED, None)` without ACKing, leaving the job in `processing`. On scrape failure (while `job_canceled` is not set), it coerces the exception via `safe_scrape_error`, classifies it via `classify_scrape_error` (`"permanent"`, `"transient"`, or `"unknown"`), formats `diagnostic_reason` (`"scraping/<kind>: HTTP <status>"` or `"scraping/<kind> during <stage>"`), records it via `repo.record_scrape_error` under `db_timeout_seconds` (logging `scrape_diagnostic_persistence_problem` if persistence fails without aborting delivery), delivers `Result(job_id, error=se)` to `receiver`, and returns `(Outcome.SCRAPE_FAILED, None)` without ACKing. Receiver errors return `(Outcome.ERROR, ProcessError("result_delivery_failed"))` without creating synthetic scrape diagnostics or ACKing.
+
+M14 is covered by deterministic unit tests (`.venv/bin/python -m pytest tests/unit/worker/test_processor.py -q`).
 
 ## Package layout
 
@@ -316,6 +332,10 @@ src/inteldigest/
     models.py
     policy.py
     network.py
+  worker/
+    __init__.py
+    processor.py
+    receiver.py
 tests/
   conftest.py
   fixtures/
@@ -329,12 +349,13 @@ tests/
     api/test_app.py
     queue/{test_message,test_publisher,test_consumer}.py
     scraper/{test_models,test_policy,test_network,test_fetcher,test_extraction}.py
+    worker/test_processor.py
   integration/
     conftest.py
     test_repository.py
 ```
 
-`config.py` stays transversal; job models, SQL and URL validation live together in `jobs/`. HTTP schemas live in `api/`, separate from the persisted job model. `queue/` holds the M07 message/publisher modules and M09 consumer module; `scraper/` holds the M10 error/domain models and public destination policy (`models.py`, `policy.py`), the M11 safe network transport layer (`network.py`), the M12 bounded HTTP fetcher (`fetcher.py`), and the M13 Readability extraction and Scraper pipeline (`extraction.py`). Scraper fixtures live in `tests/fixtures/scraper/`. Worker modules are not created ahead of their tasks (B4).
+`config.py` stays transversal; job models, SQL and URL validation live together in `jobs/`. HTTP schemas live in `api/`, separate from the persisted job model. `queue/` holds the M07 message/publisher modules and M09 consumer module; `scraper/` holds the M10 error/domain models and public destination policy (`models.py`, `policy.py`), the M11 safe network transport layer (`network.py`), the M12 bounded HTTP fetcher (`fetcher.py`), and the M13 Readability extraction and Scraper pipeline (`extraction.py`). Scraper fixtures live in `tests/fixtures/scraper/`. `worker/` holds the M14 job processor and synchronous metadata receiver (`processor.py`, `receiver.py`); `pool.py` (M15) and `__main__.py` (M16) are not created ahead of their tasks.
 
 Unit tests require no services. PostgreSQL fixtures live only in `tests/integration/conftest.py`; the root `conftest.py` merely registers the explicit connection option so pytest can recognize it consistently. Pytest uses `--import-mode=importlib` to collect identically named unit/integration test modules without package-name collisions or modifying `sys.path`.
 
