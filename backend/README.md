@@ -1,6 +1,6 @@
 # IntelDigest Python package tooling
 
-This directory contains an **experimental, installable Python backend package** with configuration, an async job repository, initial non-DNS URL validation, a FastAPI application with health, job lookup and submission endpoints, the Redis Stream v1 job publication contract, bounded Redis Stream consumption, the safe scraper domain models, destination policy, network transport, bounded HTTP fetcher, and Readability extraction pipeline (M10–M13, completing branch B3), and the worker job processor, atomic claim/ACK rules, synchronous metadata receiver, and bounded concurrency pool with graceful drain (M14–M15 on branch B4). The standalone worker process entrypoint (M16) remains pending in Python; the Go backend remains operational. SQL migrations remain in the repository-root `migrations/` directory.
+This directory contains an **experimental, installable Python backend package** with configuration, an async job repository, initial non-DNS URL validation, a FastAPI application with health, job lookup and submission endpoints, the Redis Stream v1 job publication contract, bounded Redis Stream consumption, the safe scraper domain models, destination policy, network transport, bounded HTTP fetcher, and Readability extraction pipeline (M10–M13, completing branch B3), and the worker job processor, atomic claim/ACK rules, synchronous metadata receiver, bounded concurrency pool with graceful drain, and standalone process lifecycle orchestration (M14–M16, completing branch B4). Branch B4 is closed on `migration/python-worker`; branch B5 (integration test harnesses and parity verification) is proposed next. The Go backend remains operational during the migration. SQL migrations remain in the repository-root `migrations/` directory.
 
 ## Quick path
 
@@ -283,7 +283,7 @@ M12 is covered by deterministic unit tests (`.venv/bin/python -m pytest tests/un
 - **Language detection:** Go's `go-readability` exposes `article.Language()` from the HTML root. In Python, `readability-lxml` does not expose a dedicated language property; language is resolved by inspecting `lang` and `xml:lang` on the root `<html>` element parsed with `lxml.html`, returning `"en"` on `article.html`.
 - **Concurrency & event loop safety:** Go executes extraction within its concurrent goroutine model. Python offloads synchronous `readability-lxml`/`lxml` parsing to a worker thread via `asyncio.to_thread`, keeping the asyncio event loop responsive while strictly enforcing the global `request_timeout_seconds` deadline.
 
-Branch B3 (`migration/python-safe-scraper`) is completed with M10–M13. Worker processing and acknowledgement rules (M14) open branch B4 (`migration/python-worker`), while the worker concurrency pool (M15) and standalone entrypoint (M16) remain pending.
+Branch B3 (`migration/python-safe-scraper`) is completed with M10–M13. Branch B4 (`migration/python-worker`) is completed with M14–M16, implementing worker processing rules, concurrency pool, and standalone process lifecycle orchestration.
 
 ## Worker job processor, claim rules, and synchronous metadata receiver (M14)
 
@@ -324,6 +324,26 @@ M14 is covered by deterministic unit tests (`.venv/bin/python -m pytest tests/un
 
 M15 is covered by deterministic unit tests (`.venv/bin/python -m pytest tests/unit/worker/test_pool.py -q`).
 
+## Standalone worker process entrypoint, signals, and lifecycle orchestration (M16)
+
+`inteldigest.worker.__main__` implements standalone worker process execution (`python -m inteldigest.worker`), signal handling (`SIGINT`, `SIGTERM`), dependency injection, strict startup ordering, and safe clean shutdown:
+
+- `WorkerStartupError(code: str, cause: BaseException | None = None)`: safe coded exception whose `str(err)` returns only `"worker: <code>"` (e.g. `"worker: database_open_failed"`) without leaking database credentials, Redis URLs, stream names, or job payloads. It preserves `cause` and `__cause__` so programmatic inspections such as `is_group_missing(err)` traverse the underlying cause chain.
+- `exit_code(err)` and `exit_code_label(err)`: returns `0` on success and `1` on any failure; returns `err.code` for `WorkerStartupError` and `"worker_failed"` otherwise.
+- `WorkerDependencies`: injectable dataclass containing factory hooks (`load_config`, `register_signals`, `new_db`, `new_consumer`, `new_scraper`, `new_processor`, `new_pool`, `logger`), allowing deterministic lifecycle and failure testing without external services. `production_dependencies()` builds the default production factories.
+- `run(deps=None, *, stop_event=None) -> int`: synchronous process runner invoking `asyncio.run(run_with_dependencies(...))`, logging `worker_exit error_code=...` on failure and returning the integer exit code. `main() -> int` delegates to `run()`.
+- `await run_with_dependencies(deps=None, *, stop_event=None) -> None`: enforces strict lifecycle ordering:
+  1. **Signal registration before dependencies:** registers `SIGINT` and `SIGTERM` handlers (setting `stop_event`) before reading configuration or opening any database, Redis, or network resources. Handlers are unregistered exactly once in `finally` on exit.
+  2. **Worker configuration:** calls `load_config()`, validating all shared and worker settings. Rejects `None` config or missing dependency callables with `WorkerStartupError`.
+  3. **PostgreSQL pool & ping:** opens database connection pool bounded by `db_timeout_seconds`. If opened, verifies connectivity via `ping` / `SELECT 1` under an independent `db_timeout_seconds` budget.
+  4. **Redis consumer & consumer group:** connects `Consumer` with worker configuration settings, checks `stop_event`, and calls `await consumer.ensure_group()` bounded by `queue_operation_timeout_seconds` before pool creation.
+  5. **Component initialization:** initializes `Scraper` (with `ScraperOptions`), `Repository`, `MetadataReceiver`, `Processor` (with `ProcessorOptions`), and `Pool` (with `PoolOptions`). Emits structured log `worker_started consumer_group=... consumer_name=... pool_size=...` with context logger without logging connection strings.
+  6. **Pool run & worker join:** awaits `pool.run(stop_event)`. Worker tasks run sequentially up to `pool_size`. All tasks join before resources are closed.
+  7. **Ordered cleanup:** closes acquired resources in reverse order: `scraper.close()` (if applicable) -> `consumer.aclose()` -> `database.close()`. If closing consumer raises, the error is wrapped into `WorkerStartupError("consumer_close_failed", exc)` and **never skips closing the database**.
+  8. **Early cancellation / short-circuit:** if `stop_event` is set or an error occurs between startup steps, subsequent factories are never called and all already-acquired resources are closed.
+
+M16 is covered by deterministic unit tests (`.venv/bin/python -m pytest tests/unit/worker/test_main.py -q`).
+
 ## Package layout
 
 The approved migration layout is recorded in [PLAN-MIGRATION.md](../PLAN-MIGRATION.md#31-estructura-de-paquetes-aprobada). Only the modules needed by completed/current tasks exist:
@@ -357,6 +377,7 @@ src/inteldigest/
     network.py
   worker/
     __init__.py
+    __main__.py
     pool.py
     processor.py
     receiver.py
@@ -373,13 +394,13 @@ tests/
     api/test_app.py
     queue/{test_message,test_publisher,test_consumer}.py
     scraper/{test_models,test_policy,test_network,test_fetcher,test_extraction}.py
-    worker/{test_processor,test_pool}.py
+    worker/{test_processor,test_pool,test_main}.py
   integration/
     conftest.py
     test_repository.py
 ```
 
-`config.py` stays transversal; job models, SQL and URL validation live together in `jobs/`. HTTP schemas live in `api/`, separate from the persisted job model. `queue/` holds the M07 message/publisher modules and M09 consumer module; `scraper/` holds the M10 error/domain models and public destination policy (`models.py`, `policy.py`), the M11 safe network transport layer (`network.py`), the M12 bounded HTTP fetcher (`fetcher.py`), and the M13 Readability extraction and Scraper pipeline (`extraction.py`). Scraper fixtures live in `tests/fixtures/scraper/`. `worker/` holds the M14 job processor and synchronous metadata receiver (`processor.py`, `receiver.py`) and the M15 concurrency pool and drain coordinator (`pool.py`); `__main__.py` (M16) is not created ahead of its task.
+`config.py` stays transversal; job models, SQL and URL validation live together in `jobs/`. HTTP schemas live in `api/`, separate from the persisted job model. `queue/` holds the M07 message/publisher modules and M09 consumer module; `scraper/` holds the M10 error/domain models and public destination policy (`models.py`, `policy.py`), the M11 safe network transport layer (`network.py`), the M12 bounded HTTP fetcher (`fetcher.py`), and the M13 Readability extraction and Scraper pipeline (`extraction.py`). Scraper fixtures live in `tests/fixtures/scraper/`. `worker/` holds the M14 job processor and synchronous metadata receiver (`processor.py`, `receiver.py`), the M15 concurrency pool and drain coordinator (`pool.py`), and the M16 standalone process entrypoint and lifecycle orchestrator (`__main__.py`).
 
 Unit tests require no services. PostgreSQL fixtures live only in `tests/integration/conftest.py`; the root `conftest.py` merely registers the explicit connection option so pytest can recognize it consistently. Pytest uses `--import-mode=importlib` to collect identically named unit/integration test modules without package-name collisions or modifying `sys.path`.
 

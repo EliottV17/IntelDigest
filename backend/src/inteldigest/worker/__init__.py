@@ -1,4 +1,6 @@
-"""Worker job processor, claim/ACK rules, receiver, and concurrency pool (M15)."""
+"""Worker job processor, concurrency pool, and standalone process lifecycle (M16)."""
+
+from typing import Any
 
 from inteldigest.worker.pool import (
     JobProcessor,
@@ -36,6 +38,26 @@ from inteldigest.worker.receiver import (
     validate_result,
 )
 
+_LIFECYCLE_EXPORTS = frozenset({
+    "WorkerDependencies",
+    "WorkerStartupError",
+    "exit_code",
+    "exit_code_label",
+    "main",
+    "production_dependencies",
+    "run",
+    "run_with_dependencies",
+})
+
+
+def __getattr__(name: str) -> Any:
+    if name in _LIFECYCLE_EXPORTS:
+        from inteldigest.worker import __main__ as worker_main
+
+        return getattr(worker_main, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     "STATUS_COMPLETED",
     "STATUS_FAILED",
@@ -56,10 +78,18 @@ __all__ = [
     "QueueReader",
     "Receiver",
     "Result",
+    "WorkerDependencies",
+    "WorkerStartupError",
     "classify_scrape_error",
     "decode_delivery",
     "default_pool_options",
     "diagnostic_reason",
+    "exit_code",
+    "exit_code_label",
+    "main",
+    "production_dependencies",
+    "run",
+    "run_with_dependencies",
     "safe_kind",
     "safe_scrape_error",
     "safe_stage",
